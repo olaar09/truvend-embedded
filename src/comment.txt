@@ -1,0 +1,5 @@
+1. The esp32 consumes less than 20mA on normal cpu 
+2. Consumes 150mA sharp with wifi broadcast
+3. 70mA for bluetooth (but I think only when sending)
+4. PCB2 RX => 16
+5. TX => 

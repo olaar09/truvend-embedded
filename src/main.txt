@@ -1,0 +1,227 @@
+#include <Arduino.h>
+#include <PZEM004Tv30.h>
+#include <EEPROM.h>
+#include <ESP8266WiFi.h>
+#include <SoftwareSerial.h>
+
+// ======================== Configuration ========================
+const char ssid[] = "MeterV2.0";
+const char pass[] = "";
+WiFiServer server(80);
+
+#define PZEM_RX_PIN 4
+#define PZEM_TX_PIN 5
+#define relay D5
+#define reedSwitch 14
+#define led1 15
+
+#define unit_addr 0
+#define nonceAddr 20
+
+const char* key = "truvendprepaid-secret-key-2024";
+
+// ======================== Globals ========================
+SoftwareSerial pzemSWSerial(PZEM_RX_PIN, PZEM_TX_PIN);
+PZEM004Tv30 pzems1(pzemSWSerial);
+
+float voltage, current, energy, power, powerFactor;
+float availableUnit;
+char lastNonce[20];  // Stores last used nonce
+
+// ======================== Decrypt Function ========================
+char* decrypt(const char* encoded, const char* key) {
+  static char out[80];
+  const char* b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  unsigned char temp[80];
+  int len = strlen(encoded), outLen = 0;
+
+  for (int i = 0; i < len; i += 4) {
+    int b[4];
+    for (int j = 0; j < 4; j++) {
+      const char* p = strchr(b64, encoded[i + j]);
+      b[j] = p ? (p - b64) : 0;
+    }
+    temp[outLen++] = (b[0] << 2) | (b[1] >> 4);
+    if (encoded[i + 2] != '=') temp[outLen++] = ((b[1] & 0xF) << 4) | (b[2] >> 2);
+    if (encoded[i + 3] != '=') temp[outLen++] = ((b[2] & 0x3) << 6) | b[3];
+  }
+
+  for (int i = 0; i < outLen; i++) {
+    out[i] = temp[i] ^ key[i % strlen(key)];
+  }
+  out[outLen] = 0;
+  return out;
+}
+
+// ======================== Nonce Handling ========================
+bool isDuplicateNonce(const char* nonce) {
+  EEPROM.get(nonceAddr, lastNonce);
+  if (strcmp(nonce, lastNonce) == 0) {
+    Serial.println(" Duplicate nonce detected. Rejecting top-up.");
+    return true;
+  }
+  return false;
+}
+
+void storeNonce(const char* nonce) {
+  strncpy(lastNonce, nonce, sizeof(lastNonce));
+  EEPROM.put(nonceAddr, lastNonce);
+  EEPROM.commit();
+  Serial.print(" Stored new nonce: ");
+  Serial.println(lastNonce);
+}
+
+// ======================== Setup Functions ========================
+void setupWifi() {
+  bool result = WiFi.softAP(ssid, pass);
+  if (result) {
+    Serial.println("Access Point started");
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.softAPIP());
+  } else {
+    Serial.println("Failed to start Access Point");
+  }
+  server.begin();
+}
+
+void initializeMemory() {
+  EEPROM.begin(64);
+  EEPROM.get(unit_addr, availableUnit);
+  EEPROM.get(nonceAddr, lastNonce);
+  Serial.print("Available Unit: ");
+  Serial.println(availableUnit);
+  Serial.print("Last Nonce: ");
+  Serial.println(lastNonce);
+}
+
+// ======================== Core Logic ========================
+String extractEncryptedData(String request) {
+  String prefix = "/device-top-up/";
+  int start = request.indexOf(prefix);
+  if (start == -1) return "";
+
+  start += prefix.length();
+  int end = request.indexOf(' ', start);
+  if (end == -1) return "";
+
+  return request.substring(start, end);
+}
+
+float handleData(String request) {
+  String encrypted = extractEncryptedData(request);
+  if (encrypted.length() == 0) {
+    Serial.println(" Failed to extract encrypted data.");
+    return -99;
+  }
+
+  const char* encryptedChar = encrypted.c_str();
+  char* result = decrypt(encryptedChar, key);
+
+  char* nonce = strtok(result, ":");
+  char* amount = strtok(NULL, ":");
+  char* meter = strtok(NULL, ":");
+
+  if (!(nonce && amount && meter)) {
+    Serial.println(" Invalid top-up format.");
+    return -99;
+  }
+
+  Serial.print("Nonce: ");  Serial.println(nonce);
+  Serial.print("Amount: "); Serial.println(amount);
+  Serial.print("Meter: ");  Serial.println(meter);
+
+  if (isDuplicateNonce(nonce)) {
+    return -99;
+  }
+
+  float floatAmount = atof(amount);
+  float newBalance = floatAmount + (availableUnit - pzems1.energy());
+  EEPROM.put(unit_addr, newBalance);
+  EEPROM.commit();
+  availableUnit = newBalance;
+
+  bool energyReset = pzems1.resetEnergy();
+
+  storeNonce(nonce);
+  Serial.println("Top-up completed and new nonce stored.");
+
+  return newBalance;
+}
+
+void runServer() {
+  WiFiClient client = server.available();
+  if (!client) return;
+
+  String request = client.readStringUntil('\r');
+  Serial.println(request);
+
+  float newBalance = handleData(request);
+
+  EEPROM.get(unit_addr, availableUnit);
+  float remaining = availableUnit - pzems1.energy();
+
+  client.println("HTTP/1.1 200 OK");
+  client.println("Content-Type: text/plain");
+  client.println("Connection: close");
+  client.println();
+  client.println(remaining);
+  client.flush();
+  client.stop();
+
+  Serial.print(" Remaining Unit Sent: ");
+  Serial.println(remaining);
+}
+
+void calConsumption() {
+  if ((availableUnit - pzems1.energy()) >= 0.01) {
+    digitalWrite(relay, 1);  // Power ON
+    digitalWrite(led1, 1);
+  } else {
+    digitalWrite(relay, 0);  // Power OFF
+    digitalWrite(led1, 0);
+  }
+}
+
+void debugReadings() {
+  // Uncomment to enable debug
+  #define DEBUGPZEM
+  #ifdef DEBUGPZEM
+    voltage     = pzems1.voltage();
+    current     = pzems1.current();
+    energy      = pzems1.energy();
+    power       = pzems1.power();
+    powerFactor = pzems1.pf();
+
+    Serial.println("=== PZEM Reading ===");
+    Serial.print("Voltage: "); Serial.println(voltage);
+    Serial.print("Current: "); Serial.println(current);
+    Serial.print("Power: "); Serial.println(power);
+    Serial.print("Energy: "); Serial.println(energy);
+    Serial.print("Power Factor: "); Serial.println(powerFactor);
+    Serial.println();
+  #endif
+}
+
+// ======================== Setup & Loop ========================
+void setup() {
+  delay(100);
+  Serial.begin(115200);
+  delay(100);
+  Serial.println("Starting now...");
+
+  pinMode(led1, OUTPUT);
+  pinMode(relay, OUTPUT);
+  digitalWrite(led1, 0);
+  digitalWrite(relay, 0);
+
+  setupWifi();
+  initializeMemory();
+  delay(2000);
+}
+
+void loop() {
+  runServer();
+  debugReadings();
+  calConsumption();
+  delay(500);
+}

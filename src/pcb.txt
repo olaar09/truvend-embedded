@@ -1,0 +1,543 @@
+#include <Arduino.h>
+#include <PZEM004Tv30.h>
+#include <EEPROM.h>
+#include <ESP8266WiFi.h>
+#include <SoftwareSerial.h>
+#include "LedControl.h"
+
+// ======================== Configuration ========================
+String meterNo = "87800000000";
+const char ssid[] = "M87800000000";
+const char pass[] = "";
+WiFiServer server(80);
+
+
+#define PZEM_RX_PIN 4
+#define PZEM_TX_PIN 5
+#define relay1 0
+#define relay2 2
+
+#define unit_addr 0
+#define nonceAddr 20
+long timeSeconds = 0;
+int macAddress = 0;
+int timeAddr = 40;   // just ensure it does not overlap others
+
+
+LedControl lc=LedControl(14,13,12,1);
+unsigned long delaytime=500;
+bool relayState = false;
+
+const char* key = "truvendprepaid-secret-key-2024";
+
+// ======================== Globals ========================
+SoftwareSerial pzemSWSerial(PZEM_RX_PIN, PZEM_TX_PIN);
+PZEM004Tv30 pzems1(pzemSWSerial);
+
+float voltage, current, energy, power, powerFactor;
+float availableUnit;
+char lastNonce[20];  // Stores last used nonce
+
+// ======================== Decrypt Function ========================
+char* decrypt(const char* encoded, const char* key) {
+  static char out[80];
+  const char* b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  unsigned char temp[80];
+  int len = strlen(encoded), outLen = 0;
+
+  for (int i = 0; i < len; i += 4) {
+    int b[4];
+    for (int j = 0; j < 4; j++) {
+      const char* p = strchr(b64, encoded[i + j]);
+      b[j] = p ? (p - b64) : 0;
+    }
+    temp[outLen++] = (b[0] << 2) | (b[1] >> 4);
+    if (encoded[i + 2] != '=') temp[outLen++] = ((b[1] & 0xF) << 4) | (b[2] >> 2);
+    if (encoded[i + 3] != '=') temp[outLen++] = ((b[2] & 0x3) << 6) | b[3];
+  }
+
+  for (int i = 0; i < outLen; i++) {
+    out[i] = temp[i] ^ key[i % strlen(key)];
+  }
+  out[outLen] = 0;
+  return out;
+}
+
+// ======================== Nonce Handling ========================
+bool isDuplicateNonce(const char* nonce) {
+  EEPROM.get(nonceAddr, lastNonce);
+  if (strcmp(nonce, lastNonce) == 0) {
+    Serial.println(" Duplicate nonce detected. Rejecting top-up.");
+    return true;
+  }
+  return false;
+}
+
+void storeNonce(const char* nonce) {
+  strncpy(lastNonce, nonce, sizeof(lastNonce));
+  EEPROM.put(nonceAddr, lastNonce);
+  EEPROM.commit();
+  Serial.print(" Stored new nonce: ");
+  Serial.println(lastNonce);
+}
+
+// ======================== Setup Functions ========================
+void setupWifi() {
+  bool result = WiFi.softAP(ssid, pass);
+  if (result) {
+    Serial.println("Access Point started");
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.softAPIP());
+  } else {
+    Serial.println("Failed to start Access Point");
+  }
+  server.begin();
+}
+
+void resetMemory(){
+    pzems1.resetEnergy();
+    EEPROM.put(unit_addr, float(0.02));
+    EEPROM.commit();
+}
+
+void initializeMemory() {
+  EEPROM.begin(64);
+
+  EEPROM.get(unit_addr, availableUnit);
+  EEPROM.get(nonceAddr, lastNonce);
+
+  if (isnan(availableUnit)) {
+    resetMemory();
+    EEPROM.get(unit_addr, availableUnit);   // reload after reset
+    EEPROM.get(nonceAddr, lastNonce);
+  }
+
+
+  EEPROM.get(timeAddr, timeSeconds);
+if (timeSeconds < 0 || isnan(timeSeconds)) {
+    timeSeconds = 0;
+}
+
+
+  Serial.print("Available Unit: ");
+  Serial.println(availableUnit);
+  Serial.print("Last Nonce: ");
+  Serial.println(lastNonce);
+  Serial.print("Time Seconds: ");
+  Serial.println(timeSeconds);
+
+}
+
+// ======================== Core Logic ========================
+String extractEncryptedData(String request) {
+  String prefix = "/device-top-up/";
+  int start = request.indexOf(prefix);
+  if (start == -1) return "";
+
+  start += prefix.length();
+  int end = request.indexOf(' ', start);
+  if (end == -1) return "";
+
+  return request.substring(start, end);
+}
+
+float handleData(String request) {
+  String encrypted = extractEncryptedData(request);
+  if (encrypted.length() == 0) {
+    Serial.println(" Failed to extract encrypted data.");
+    return -99;
+  }
+
+  const char* encryptedChar = encrypted.c_str();
+  char* result = decrypt(encryptedChar, key);
+  Serial.print("result");
+  Serial.println(result);
+
+  char* nonce = strtok(result, ":");
+  char* amount = strtok(NULL, ":");
+  char* meter = strtok(NULL, ":");
+  char *secondsStr = strtok(NULL, ":");
+  long remainingSeconds = atol(secondsStr);
+ 
+
+
+
+
+  if (!(nonce && amount && meter)) {
+    Serial.println(" Invalid top-up format.");
+    return -99;
+  }
+
+  Serial.print("Nonce: ");  Serial.println(nonce);
+  Serial.print("Amount: "); Serial.println(amount);
+  Serial.print("Meter: ");  Serial.println(meter);
+  Serial.print("Second: ");  Serial.println(secondsStr);
+
+
+  if (strcmp(meter, meterNo.c_str()) != 0) {
+  Serial.println(" Meter mismatch. Rejecting top-up.");
+  return -99;
+}
+
+
+  // if (isDuplicateNonce(nonce)) {
+  //   return -99;
+  // }
+
+
+   timeSeconds = remainingSeconds;
+
+  EEPROM.put(timeAddr, timeSeconds);
+  EEPROM.commit();
+  float floatAmount = atof(amount);
+  float newBalance = floatAmount + (availableUnit - pzems1.energy());
+  EEPROM.put(unit_addr, newBalance);
+  EEPROM.commit();
+  availableUnit = newBalance;
+
+  bool energyReset = pzems1.resetEnergy();
+
+  storeNonce(nonce);
+  Serial.println("Top-up completed and new nonce stored.");
+
+  return newBalance;
+}
+
+void runServer() {
+  WiFiClient client = server.available();
+  if (!client) return;
+
+  String request = client.readStringUntil('\r');
+  Serial.println(request);
+
+  float newBalance = handleData(request);
+
+  EEPROM.get(unit_addr, availableUnit);
+  // float remaining = availableUnit - pzems1.energy();
+  float remaining = availableUnit - energy;
+  String response = String(remaining) + "," +
+                  String(voltage) + "," +
+                  relayState + "," +
+                  String(power) + "," + String(timeSeconds) + "," + String(meterNo);
+
+  client.println("HTTP/1.1 200 OK");
+  client.println("Content-Type: text/plain");
+  client.println("Connection: close");
+  client.println();
+  //client.println(remaining);
+  client.println(response);
+  client.flush();
+  client.stop();
+
+  Serial.print(" Remaining Unit Sent: ");
+  Serial.println(remaining);
+}
+
+
+
+
+
+void writeStateOff() {
+  lc.clearDisplay(0);
+  // Display V O L T -
+  lc.setRow(0,7, B1011011);  // s
+  lc.setRow(0,6, B0001111);  // t
+  lc.setRow(0,5, B1110111);  // a
+  lc.setRow(0,4, B0001111);  // t
+  lc.setRow(0,3, B0001001);  // -
+  lc.setRow(0,2, B0011101);  // o
+  lc.setRow(0,1, B1000111);  // f
+  lc.setRow(0,0, B1000111);  // f
+
+}
+
+
+
+void writeStateOn() {
+  lc.clearDisplay(0);
+  // Display V O L T -
+  lc.setRow(0,7, B1011011);  // s
+  lc.setRow(0,6, B0001111);  // t
+  lc.setRow(0,5, B1110111);  // a
+  lc.setRow(0,4, B0001111);  // t
+  lc.setRow(0,3, B0001001);  // -
+  lc.setRow(0,2, B0011101);  // o
+  lc.setRow(0,1, B0010101);  // n
+
+}
+
+
+
+void writeVol(int value) {
+  lc.clearDisplay(0);
+  // Display V O L T -
+  lc.setRow(0,7, B0111110);  // V
+  lc.setRow(0,6, B0011101);  // O
+  lc.setRow(0,5, B0001110);  // L
+  lc.setRow(0,4, B0001111);  // T
+  lc.setRow(0,3, B0001001);  // -
+  //delay(delaytime);
+
+  // Extract digits (hundreds, tens, ones)
+  int hundreds = (value / 100) % 10;
+  int tens     = (value / 10) % 10;
+  int ones     = value % 10;
+
+  // Display digits
+  lc.setChar(0,2, hundreds, false);
+  lc.setChar(0,1, tens, false);
+  lc.setChar(0,0, ones, false);
+}
+
+
+
+// writePower: writes "POWER" then a 3-digit value (hundreds,tens,ones)
+// Rows: 7=P, 6=O, 5=W, 4=E, 3=R, 2=hundreds, 1=tens, 0=ones
+void writePower(int value) {
+  lc.clearDisplay(0);
+  // Letters at rows 7..3
+  lc.setRow(0,7, B1001110);  // C
+  lc.setRow(0,6, B1111110);  // O
+  lc.setRow(0,5, B1110110);  // n
+  //lc.setRow(0,4, B0111101);  // d
+  lc.setRow(0,4, B0001001);  // =
+
+  // Limit 0–9999
+  if (value < 0) value = 0;
+  if (value > 9999) value = 9999;
+
+  // Extract 4 digits
+  int thousands = (value / 1000) % 10;
+  int hundreds  = (value / 100) % 10;
+  int tens      = (value / 10) % 10;
+  int ones      = value % 10;
+
+  // Display 4 digits on rows 2,1,0, and use row? (depending on your layout)
+  lc.setChar(0,3, thousands, false);
+  lc.setChar(0,2, hundreds,  false);
+  lc.setChar(0,1, tens,      false);
+  lc.setChar(0,0, ones,      false); // if you prefer all 4 together, tell me rows available
+}
+
+
+void writeUnit(int value) {
+    // Letters using mapping bit6..bit0 = A..G
+    lc.setRow(0,7, B0111110);  // U
+    lc.setRow(0,6, B0010101);  // n
+    lc.setRow(0,5, B0001111);  // t
+    lc.setRow(0,4, B0001001);  // =
+
+    // Limit value to 0..9999
+    if (value < 0) value = 0;
+    if (value > 9999) value = 9999;
+
+    // Extract digits (thousands, hundreds, tens, ones)
+    int thousands = (value / 1000) % 10;
+    int hundreds  = (value / 100) % 10;
+    int tens      = (value / 10) % 10;
+    int ones      = value % 10;
+
+    // Display digits using setChar (CodeB digits)
+    lc.setChar(0,3, thousands, false);
+    lc.setChar(0,2, hundreds, false);
+    lc.setChar(0,1, tens, false);
+    lc.setChar(0,0, ones, false);
+}
+
+
+void writeSecondsRemaining() {
+    // Letters: "sec="
+    lc.setRow(0,7, B1011011);  // s
+    lc.setRow(0,6, B1101111);  // e
+    lc.setRow(0,5, B1001110);  // c
+    lc.setRow(0,4, B0001001);  // =
+
+    long value = timeSeconds;
+
+    // Use only the last 4 digits
+    value = value % 10000;
+
+    if (value < 0) value = 0;
+
+    // Extract digits
+    int thousands = (value / 1000) % 10;
+    int hundreds  = (value / 100) % 10;
+    int tens      = (value / 10) % 10;
+    int ones      = value % 10;
+
+    // Display
+    lc.setChar(0,3, thousands, false);
+    lc.setChar(0,2, hundreds, false);
+    lc.setChar(0,1, tens, false);
+    lc.setChar(0,0, ones, false);
+}
+
+
+static unsigned long lastDisplayMillis = 0;
+static uint8_t displayState = 0;          // 0 = VOL, 1 = POWER, 2 = UNIT
+const unsigned long DISPLAY_INTERVAL = 2000UL; // 2000 ms = 2 seconds
+void debugReadings() {
+  // Uncomment to enable debug
+  //#define DEBUGPZEM
+    
+    voltage     = pzems1.voltage();
+    //current     = pzems1.current();
+    energy      = pzems1.energy();
+    power       = pzems1.power();
+    //powerFactor = pzems1.pf();
+
+    //if (voltage <= 0 || isnan(voltage)) return;
+
+   
+
+
+
+     unsigned long now = millis();
+
+  // First valid run: immediately display VOLT and set timer
+  if (lastDisplayMillis == 0) {
+    lastDisplayMillis = now;
+    displayState = 0;
+    writeVol((int)voltage);         // show voltage first
+    return;
+  }
+
+
+     if (now - lastDisplayMillis >= DISPLAY_INTERVAL) {
+    // advance state in order 0 -> 1 -> 2 -> 0 ...
+    displayState = (displayState + 1) % 5;
+    lastDisplayMillis = now;
+     #ifdef DEBUGPZEM
+
+    Serial.println("=== PZEM Reading ===");
+    Serial.print("Voltage: "); Serial.println(voltage);
+    //Serial.print("Current: "); Serial.println(current);
+    Serial.print("Power: "); Serial.println(power);
+    Serial.print("Energy: "); Serial.println(energy);
+    //Serial.print("Power Factor: "); Serial.println(powerFactor);
+    Serial.println();
+    #endif
+
+    switch (displayState) {
+      case 0:
+        writeVol((int)voltage);
+        break;
+
+      case 1:
+        // use measured power (or cast/scale as needed)
+        writePower((int)power);    // replace with whatever numeric you want
+        break;
+
+      case 2:
+        // use measured energy or some other unit value
+        writeUnit((int)(availableUnit - energy));    // replace with whatever numeric you want
+        break;
+      case 3:
+        if (relayState == true){
+          writeStateOn();
+        }
+        if (relayState == false){
+          writeStateOff();
+        }
+        // use measured energy or some other unit value
+        //writeUnit((int)availableUnit);    // replace with whatever numeric you want
+        break;
+      case 4:
+        writeSecondsRemaining();
+        break;
+
+    }
+}
+  
+}
+
+
+
+void calConsumption() {
+  if (((availableUnit - energy) >= 0.01) && (relayState == false) && (timeSeconds > 0)) {
+    digitalWrite(relay1, 0);  // Power ON
+    digitalWrite(relay2, 1);  // Power ON
+    delay(30);
+    digitalWrite(relay1, 0);  // Power ON
+    digitalWrite(relay2, 0);  // Power ON
+    relayState = true;
+    Serial.println("Relay on");
+  }
+
+
+
+   if ((((availableUnit - energy) < 0.01) && (relayState == true)) || ((timeSeconds<=0) && (relayState == true))) {
+    digitalWrite(relay1, 1);  // Power ON
+    digitalWrite(relay2, 0);  // Power OFF
+    delay(30);
+    digitalWrite(relay1, 0);  // 
+    digitalWrite(relay2, 0);  // 
+    relayState = false;
+    Serial.println("relay off");
+  }
+}
+
+
+void countDown(){
+  static unsigned long lastUpdate = 0;
+
+if (millis() - lastUpdate >= 1000) {   // 1 second passed
+    lastUpdate = millis();
+
+    if (timeSeconds > 0) {
+        timeSeconds--;
+        EEPROM.put(timeAddr, timeSeconds);
+        EEPROM.commit();
+    }
+}
+
+}
+
+
+
+
+// ======================== Setup & Loop ========================
+void setup() {
+  Serial.begin(115200);
+  delay(50);
+  Serial.println("Starting now...");
+
+  
+  pinMode(relay1, OUTPUT);
+  pinMode(relay2, OUTPUT);
+
+
+  digitalWrite(relay1, 0);
+  digitalWrite(relay2, 0);
+  delay(30);
+
+  //reset relay to off position
+    digitalWrite(relay1, 1);  //
+    digitalWrite(relay2, 0);  // 
+    delay(30);
+    digitalWrite(relay1, 0);  // 
+    digitalWrite(relay2, 0);  // 
+
+  setupWifi();
+  initializeMemory();
+   lc.shutdown(0,false);
+  lc.setIntensity(0,8);
+  lc.clearDisplay(0);
+  delay(2000);
+}
+
+
+
+
+void loop() {
+  runServer();
+  debugReadings();
+  calConsumption();
+  countDown();
+  //writeVol(int(voltage));
+  //delay(50);
+}
+
+
+
+
