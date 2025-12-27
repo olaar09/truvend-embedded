@@ -1,24 +1,28 @@
 #include <Arduino.h>
 #include <PZEM004Tv30.h>
 #include <EEPROM.h>
-#include <WiFi.h>
 #include <BLEDevice.h>
 #include <BLEUtils.h>
 #include <BLEServer.h>
-
+#include "LedController.hpp"
+#include <Keypad.h>
 //#include <LedControl.h>
 
 // ======================== Configuration ========================
 String meterNo = "87800000000";
 const char ssid[] = "M87800000000";
 const char pass[] = "";
-WiFiServer server(80);
+#define DIN 18
+#define CS 19
+#define CLK 21
+LedController<1,1> lc;
+//WiFiServer server(80);
 
 
 #define PZEM_RX_PIN 4
-#define PZEM_TX_PIN 5
-#define relay1 0
-#define relay2 2
+#define PZEM_TX_PIN 16
+#define relay1 -1
+#define relay2 -1
 
 #define unit_addr 0
 #define nonceAddr 20
@@ -43,10 +47,60 @@ char lastNonce[20];  // Stores last used nonce
 #define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 
+//========= Setup Keypad ===================
+const byte ROWS = 4; /* four rows */
+const byte COLS = 3; /* four columns */
+/* define the symbols on the buttons of the keypads */
+char hexaKeys[ROWS][COLS] = {
+  {'1','2','3'},
+  {'4','5','6'},
+  {'7','8','9'},
+  {'*','0','#'}
+};
+//32|| 33, 25, 26, 27, 14, 22, 23
+byte rowPins[ROWS] = {25, 23, 22, 27}; /* connect to the row pinouts of the keypad */
+byte colPins[COLS] = {26, 33, 14}; /* connect to the column pinouts of the keypad */
 
+/* initialize an instance of class NewKeypad */
+Keypad customKeypad = Keypad( makeKeymap(hexaKeys), rowPins, colPins, ROWS, COLS); 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//-----------Real code begins -----------------//
 
 void setupBle(){
-  
+  Serial.println("Starting BLE work!");
+
+  BLEDevice::init("M2001752327");
+  BLEServer *pServer = BLEDevice::createServer();
+  BLEService *pService = pServer->createService(SERVICE_UUID);
+  BLECharacteristic *pCharacteristic = pService->createCharacteristic(
+                                         CHARACTERISTIC_UUID,
+                                         BLECharacteristic::PROPERTY_READ |
+                                         BLECharacteristic::PROPERTY_WRITE
+                                       );
+
+  pCharacteristic->setValue("Meter says hello");
+  pService->start();
+  // BLEAdvertising *pAdvertising = pServer->getAdvertising();  // this still is working for backward compatibility
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pAdvertising->setScanResponse(true);
+  pAdvertising->setMinPreferred(0x06);  // functions that help with iPhone connections issue
+  pAdvertising->setMinPreferred(0x12);
+  BLEDevice::startAdvertising();
+  Serial.println("Characteristic defined! Now you can read it in your phone!");
 }
 
 // ======================== Decrypt Function ========================
@@ -93,17 +147,17 @@ void storeNonce(const char* nonce) {
 }
 
 // ======================== Setup Functions ========================
-void setupWifi() {
-  bool result = WiFi.softAP(ssid, pass);
-  if (result) {
-    Serial.println("Access Point started");
-    Serial.print("IP Address: ");
-    Serial.println(WiFi.softAPIP());
-  } else {
-    Serial.println("Failed to start Access Point");
-  }
-  server.begin();
-}
+// void setupWifi() {
+//   bool result = WiFi.softAP(ssid, pass);
+//   if (result) {
+//     Serial.println("Access Point started");
+//     Serial.print("IP Address: ");
+//     Serial.println(WiFi.softAPIP());
+//   } else {
+//     Serial.println("Failed to start Access Point");
+//   }
+//   server.begin();
+// }
 
 void resetMemory(){
     pzems1.resetEnergy();
@@ -214,179 +268,187 @@ float handleData(String request) {
   return newBalance;
 }
 
-void runServer() {
-  WiFiClient client = server.available();
-  if (!client) return;
+// void runServer() {
+//   WiFiClient client = server.available();
+//   if (!client) return;
 
-  String request = client.readStringUntil('\r');
-  Serial.println(request);
+//   String request = client.readStringUntil('\r');
+//   Serial.println(request);
 
-  float newBalance = handleData(request);
+//   float newBalance = handleData(request);
 
-  EEPROM.get(unit_addr, availableUnit);
-  // float remaining = availableUnit - pzems1.energy();
-  float remaining = availableUnit - energy;
-  String response = String(remaining) + "," +
-                  String(voltage) + "," +
-                  relayState + "," +
-                  String(power) + "," + String(timeSeconds) + "," + String(meterNo);
+//   EEPROM.get(unit_addr, availableUnit);
+//   // float remaining = availableUnit - pzems1.energy();
+//   float remaining = availableUnit - energy;
+//   String response = String(remaining) + "," +
+//                   String(voltage) + "," +
+//                   relayState + "," +
+//                   String(power) + "," + String(timeSeconds) + "," + String(meterNo);
 
-  client.println("HTTP/1.1 200 OK");
-  client.println("Content-Type: text/plain");
-  client.println("Connection: close");
-  client.println();
-  //client.println(remaining);
-  client.println(response);
-  client.flush();
-  client.stop();
+//   client.println("HTTP/1.1 200 OK");
+//   client.println("Content-Type: text/plain");
+//   client.println("Connection: close");
+//   client.println();
+//   //client.println(remaining);
+//   client.println(response);
+//   client.flush();
+//   client.stop();
 
-  Serial.print(" Remaining Unit Sent: ");
-  Serial.println(remaining);
+//   Serial.print(" Remaining Unit Sent: ");
+//   Serial.println(remaining);
+// }
+
+
+
+
+
+void writeStateOff() {
+  lc.clearMatrix();
+  // Display V O L T -
+  lc.setRow(0,7, B1011011);  // s
+  lc.setRow(0,6, B0001111);  // t
+  lc.setRow(0,5, B1110111);  // a
+  lc.setRow(0,4, B0001111);  // t
+  lc.setRow(0,3, B0001001);  // -
+  lc.setRow(0,2, B0011101);  // o
+  lc.setRow(0,1, B1000111);  // f
+  lc.setRow(0,0, B1000111);  // f
+
 }
 
 
 
+void writeStateOn() {
+  lc.clearMatrix();
+  // Display V O L T -
+  lc.setRow(0,7, B1011011);  // s
+  lc.setRow(0,6, B0001111);  // t
+  lc.setRow(0,5, B1110111);  // a
+  lc.setRow(0,4, B0001111);  // t
+  lc.setRow(0,3, B0001001);  // -
+  lc.setRow(0,2, B0011101);  // o
+  lc.setRow(0,1, B0010101);  // n
 
-
-// void writeStateOff() {
-//   lc.clearDisplay(0);
-//   // Display V O L T -
-//   lc.setRow(0,7, B1011011);  // s
-//   lc.setRow(0,6, B0001111);  // t
-//   lc.setRow(0,5, B1110111);  // a
-//   lc.setRow(0,4, B0001111);  // t
-//   lc.setRow(0,3, B0001001);  // -
-//   lc.setRow(0,2, B0011101);  // o
-//   lc.setRow(0,1, B1000111);  // f
-//   lc.setRow(0,0, B1000111);  // f
-
-// }
+}
 
 
 
-// void writeStateOn() {
-//   lc.clearDisplay(0);
-//   // Display V O L T -
-//   lc.setRow(0,7, B1011011);  // s
-//   lc.setRow(0,6, B0001111);  // t
-//   lc.setRow(0,5, B1110111);  // a
-//   lc.setRow(0,4, B0001111);  // t
-//   lc.setRow(0,3, B0001001);  // -
-//   lc.setRow(0,2, B0011101);  // o
-//   lc.setRow(0,1, B0010101);  // n
+void writeVol(int value) {
+  lc.clearMatrix();
+  // Display V O L T -
+  lc.setRow(0,7, B0111110);  // V
+  lc.setRow(0,6, B0011101);  // O
+  lc.setRow(0,5, B0001110);  // L
+  lc.setRow(0,4, B0001111);  // T
+  lc.setRow(0,3, B0001001);  // -
+  //delay(delaytime);
 
-// }
+  // Extract digits (hundreds, tens, ones)
+  int hundreds = (value / 100) % 10;
+  int tens     = (value / 10) % 10;
+  int ones     = value % 10;
 
-
-
-// void writeVol(int value) {
-//   lc.clearDisplay(0);
-//   // Display V O L T -
-//   lc.setRow(0,7, B0111110);  // V
-//   lc.setRow(0,6, B0011101);  // O
-//   lc.setRow(0,5, B0001110);  // L
-//   lc.setRow(0,4, B0001111);  // T
-//   lc.setRow(0,3, B0001001);  // -
-//   //delay(delaytime);
-
-//   // Extract digits (hundreds, tens, ones)
-//   int hundreds = (value / 100) % 10;
-//   int tens     = (value / 10) % 10;
-//   int ones     = value % 10;
-
-//   // Display digits
-//   lc.setChar(0,2, hundreds, false);
-//   lc.setChar(0,1, tens, false);
-//   lc.setChar(0,0, ones, false);
-// }
+  // Display digits
+  lc.setChar(0,2, hundreds, false);
+  lc.setChar(0,1, tens, false);
+  lc.setChar(0,0, ones, false);
+}
 
 
 
 // // writePower: writes "POWER" then a 3-digit value (hundreds,tens,ones)
 // // Rows: 7=P, 6=O, 5=W, 4=E, 3=R, 2=hundreds, 1=tens, 0=ones
-// void writePower(int value) {
-//   lc.clearDisplay(0);
-//   // Letters at rows 7..3
-//   lc.setRow(0,7, B1001110);  // C
-//   lc.setRow(0,6, B1111110);  // O
-//   lc.setRow(0,5, B1110110);  // n
-//   //lc.setRow(0,4, B0111101);  // d
-//   lc.setRow(0,4, B0001001);  // =
+void writePower(int value) {
+  lc.clearMatrix();
+  // Letters at rows 7..3
+  lc.setRow(0,7, B1001110);  // C
+  lc.setRow(0,6, B1111110);  // O
+  lc.setRow(0,5, B1110110);  // n
+  //lc.setRow(0,4, B0111101);  // d
+  lc.setRow(0,4, B0001001);  // =
 
-//   // Limit 0–9999
-//   if (value < 0) value = 0;
-//   if (value > 9999) value = 9999;
+  // Limit 0–9999
+  if (value < 0) value = 0;
+  if (value > 9999) value = 9999;
 
-//   // Extract 4 digits
-//   int thousands = (value / 1000) % 10;
-//   int hundreds  = (value / 100) % 10;
-//   int tens      = (value / 10) % 10;
-//   int ones      = value % 10;
+  // Extract 4 digits
+  int thousands = (value / 1000) % 10;
+  int hundreds  = (value / 100) % 10;
+  int tens      = (value / 10) % 10;
+  int ones      = value % 10;
 
-//   // Display 4 digits on rows 2,1,0, and use row? (depending on your layout)
-//   lc.setChar(0,3, thousands, false);
-//   lc.setChar(0,2, hundreds,  false);
-//   lc.setChar(0,1, tens,      false);
-//   lc.setChar(0,0, ones,      false); // if you prefer all 4 together, tell me rows available
-// }
-
-
-// void writeUnit(int value) {
-//     // Letters using mapping bit6..bit0 = A..G
-//     lc.setRow(0,7, B0111110);  // U
-//     lc.setRow(0,6, B0010101);  // n
-//     lc.setRow(0,5, B0001111);  // t
-//     lc.setRow(0,4, B0001001);  // =
-
-//     // Limit value to 0..9999
-//     if (value < 0) value = 0;
-//     if (value > 9999) value = 9999;
-
-//     // Extract digits (thousands, hundreds, tens, ones)
-//     int thousands = (value / 1000) % 10;
-//     int hundreds  = (value / 100) % 10;
-//     int tens      = (value / 10) % 10;
-//     int ones      = value % 10;
-
-//     // Display digits using setChar (CodeB digits)
-//     lc.setChar(0,3, thousands, false);
-//     lc.setChar(0,2, hundreds, false);
-//     lc.setChar(0,1, tens, false);
-//     lc.setChar(0,0, ones, false);
-// }
+  // Display 4 digits on rows 2,1,0, and use row? (depending on your layout)
+  lc.setChar(0,3, thousands, false);
+  lc.setChar(0,2, hundreds,  false);
+  lc.setChar(0,1, tens,      false);
+  lc.setChar(0,0, ones,      false); // if you prefer all 4 together, tell me rows available
+}
 
 
-// void writeSecondsRemaining() {
-//     // Letters: "sec="
-//     lc.setRow(0,7, B1011011);  // s
-//     lc.setRow(0,6, B1101111);  // e
-//     lc.setRow(0,5, B1001110);  // c
-//     lc.setRow(0,4, B0001001);  // =
+void writeUnit(int value) {
+    // Letters using mapping bit6..bit0 = A..G
+    lc.clearMatrix();
+    lc.setRow(0,7, B0111110);  // U
+    lc.setRow(0,6, B0010101);  // n
+    lc.setRow(0,5, B0001111);  // t
+    lc.setRow(0,4, B0001001);  // =
 
-//     long value = timeSeconds;
+    // Limit value to 0..9999
+    if (value < 0) value = 0;
+    if (value > 9999) value = 9999;
 
-//     // Use only the last 4 digits
-//     value = value % 10000;
+    // Extract digits (thousands, hundreds, tens, ones)
+    int thousands = (value / 1000) % 10;
+    int hundreds  = (value / 100) % 10;
+    int tens      = (value / 10) % 10;
+    int ones      = value % 10;
 
-//     if (value < 0) value = 0;
+    // Display digits using setChar (CodeB digits)
+    lc.setChar(0,3, thousands, false);
+    lc.setChar(0,2, hundreds, false);
+    lc.setChar(0,1, tens, false);
+    lc.setChar(0,0, ones, false);
+}
 
-//     // Extract digits
-//     int thousands = (value / 1000) % 10;
-//     int hundreds  = (value / 100) % 10;
-//     int tens      = (value / 10) % 10;
-//     int ones      = value % 10;
 
-//     // Display
-//     lc.setChar(0,3, thousands, false);
-//     lc.setChar(0,2, hundreds, false);
-//     lc.setChar(0,1, tens, false);
-//     lc.setChar(0,0, ones, false);
-// }
+void writeSecondsRemaining() {
+  lc.clearMatrix();
+    // Letters: "sec="
+    lc.setRow(0,7, B1011011);  // s
+    lc.setRow(0,6, B1101111);  // e
+    lc.setRow(0,5, B1001110);  // c
+    lc.setRow(0,4, B0001001);  // =
+
+    long value = timeSeconds;
+
+    // Use only the last 4 digits
+    value = value % 10000;
+
+    if (value < 0) value = 0;
+
+    // Extract digits
+    int thousands = (value / 1000) % 10;
+    int hundreds  = (value / 100) % 10;
+    int tens      = (value / 10) % 10;
+    int ones      = value % 10;
+
+    // Display
+    lc.setChar(0,3, thousands, false);
+    lc.setChar(0,2, hundreds, false);
+    lc.setChar(0,1, tens, false);
+    lc.setChar(0,0, ones, false);
+}
 
 
 static unsigned long lastDisplayMillis = 0;
 static uint8_t displayState = 0;          // 0 = VOL, 1 = POWER, 2 = UNIT
 const unsigned long DISPLAY_INTERVAL = 2000UL; // 2000 ms = 2 seconds
+
+
+
+
+
+
 void debugReadings() {
   // Uncomment to enable debug
   //#define DEBUGPZEM
@@ -395,7 +457,6 @@ void debugReadings() {
     //current     = pzems1.current();
     energy      = pzems1.energy();
     power       = pzems1.power();
-    //powerFactor = pzems1.pf();
 
     //if (voltage <= 0 || isnan(voltage)) return;
 
@@ -409,7 +470,7 @@ void debugReadings() {
   if (lastDisplayMillis == 0) {
     lastDisplayMillis = now;
     displayState = 0;
-    //writeVol((int)voltage);         // show voltage first
+    writeVol((int)voltage);         // show voltage first
     return;
   }
 
@@ -431,30 +492,29 @@ void debugReadings() {
 
     switch (displayState) {
       case 0:
-        //writeVol((int)voltage);
+        writeVol((int)voltage);
         break;
 
       case 1:
         // use measured power (or cast/scale as needed)
-        //writePower((int)power);    // replace with whatever numeric you want
+        writePower((int)power);    // replace with whatever numeric you want
         break;
 
       case 2:
         // use measured energy or some other unit value
-       // writeUnit((int)(availableUnit - energy));    // replace with whatever numeric you want
+        writeUnit((int)(availableUnit - energy));    // replace with whatever numeric you want
         break;
       case 3:
         if (relayState == true){
-         // writeStateOn();
+          writeStateOn();
         }
         if (relayState == false){
-         // writeStateOff();
+         writeStateOff();
         }
-        // use measured energy or some other unit value
-        //writeUnit((int)availableUnit);    // replace with whatever numeric you want
+      
         break;
       case 4:
-       // writeSecondsRemaining();
+        writeSecondsRemaining();
         break;
 
     }
@@ -498,7 +558,7 @@ if (millis() - lastUpdate >= 1000) {   // 1 second passed
     if (timeSeconds > 0) {
         timeSeconds--;
         EEPROM.put(timeAddr, timeSeconds);
-        EEPROM.commit();
+        //EEPROM.commit();
     }
 }
 
@@ -529,8 +589,14 @@ void setup() {
     digitalWrite(relay1, 0);  // 
     digitalWrite(relay2, 0);  // 
 
-  setupWifi();
+  //setupWifi();
   initializeMemory();
+  setupBle();
+  lc=LedController<1,1>(DIN,CLK,CS);
+  lc.setIntensity(8); /* Set the brightness to a medium values */
+  lc.clearMatrix(); /* and clear the display */
+
+  
    //lc.shutdown(0,false);
   //lc.setIntensity(0,8);
   //lc.clearDisplay(0);
@@ -541,12 +607,11 @@ void setup() {
 
 
 void loop() {
-  runServer();
+  //runServer();
   debugReadings();
   calConsumption();
   countDown();
-  //writeVol(int(voltage));
-  //delay(50);
+  
 }
 
 
