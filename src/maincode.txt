@@ -1,0 +1,883 @@
+#include <Arduino.h>
+#include <PZEM004Tv30.h>
+#include <BLEDevice.h>
+#include <BLEUtils.h>
+#include <BLEServer.h>
+#include <BLE2902.h>
+#include "LedController.hpp"
+#include <LittleFS.h>
+#include <ArduinoJson.h>
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ======================== Configuration ========================
+String meterNo = "87800000003";
+//String bluetoothName = "M87800000003";
+#define DIN 18
+#define CS 19
+#define CLK 21
+LedController<1,1> lc;
+#define PZEM_RX_PIN 4
+#define PZEM_TX_PIN 16
+#define relay1 17 //17 //Rerlay for off
+#define relay2 5  //5 //Relay for on
+//#define unit_addr 0
+//#define nonceAddr 20
+long timeSeconds = 0;
+int macAddress = 0;
+int timeAddr = 40;   // just ensure it does not overlap others
+unsigned long delaytime=500;
+bool relayState = false;
+const char* key = "truvendprepaid-secret-key-2024";
+#define PZEM_SERIAL Serial2
+PZEM004Tv30 pzems1(PZEM_SERIAL, PZEM_RX_PIN, PZEM_TX_PIN);
+float voltage;
+float current;
+float power;
+float energy;
+float availableUnit;
+char lastNonce[20];  // Stores last used nonce
+File nonceFile;
+File unitFile;
+File countdownFile;
+const char* TIME_FILE = "/time.txt";
+static unsigned long lastDisplayMillis = 0;
+static uint8_t displayState = 0;          // 0 = VOL, 1 = POWER, 2 = UNIT
+const unsigned long DISPLAY_INTERVAL = 2000UL; // 2000 ms = 2 seconds
+unsigned long lastNotify = 0;
+
+
+
+//bluetooth configs
+#define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+#define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+BLECharacteristic *pCharacteristic;
+bool deviceConnected = false;
+const char *hardcodedMsg = "Hello from ESP32";
+
+
+// //========= Setup Keypad ===================
+// const byte ROWS = 4; /* four rows */
+// const byte COLS = 3; /* four columns */
+// /* define the symbols on the buttons of the keypads */
+// char hexaKeys[ROWS][COLS] = {
+//   {'1','2','3'},
+//   {'4','5','6'},
+//   {'7','8','9'},
+//   {'*','0','#'}
+// };
+// //32|| 33, 25, 26, 27, 14, 22, 23
+// byte rowPins[ROWS] = {25, 23, 22, 27}; /* connect to the row pinouts of the keypad */
+// byte colPins[COLS] = {26, 33, 14}; /* connect to the column pinouts of the keypad */
+// Keypad customKeypad = Keypad( makeKeymap(hexaKeys), rowPins, colPins, ROWS, COLS); 
+
+
+
+//===========Configuration ends here =============
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ======================== Decrypt Function ========================
+char* decrypt(const char* encoded, const char* key) {
+  static char out[80];
+  const char* b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  unsigned char temp[80];
+  int len = strlen(encoded), outLen = 0;
+
+  for (int i = 0; i < len; i += 4) {
+    int b[4];
+    for (int j = 0; j < 4; j++) {
+      const char* p = strchr(b64, encoded[i + j]);
+      b[j] = p ? (p - b64) : 0;
+    }
+    temp[outLen++] = (b[0] << 2) | (b[1] >> 4);
+    if (encoded[i + 2] != '=') temp[outLen++] = ((b[1] & 0xF) << 4) | (b[2] >> 2);
+    if (encoded[i + 3] != '=') temp[outLen++] = ((b[2] & 0x3) << 6) | b[3];
+  }
+
+  for (int i = 0; i < outLen; i++) {
+    out[i] = temp[i] ^ key[i % strlen(key)];
+  }
+  out[outLen] = 0;
+  return out;
+}
+
+// ======================== Nonce Handling (LittleFS) ========================
+
+// Check if nonce is duplicate
+bool isDuplicateNonce(const char* nonce) {
+
+  nonceFile = LittleFS.open("/nonceFile.txt", "r");
+  if (!nonceFile) return false; // no previous nonce stored
+
+  // read stored nonce
+  String storedNonce = nonceFile.readStringUntil('\n');
+  nonceFile.close();
+
+  storedNonce.trim(); // remove newline or spaces
+  if (storedNonce.equals(nonce)) {
+    Serial.println(" Duplicate nonce detected. Rejecting top-up.");
+    return true;
+  }
+  return false;
+}
+
+// Store new nonce
+void storeNonce(const char* nonce) {
+  nonceFile = LittleFS.open("/nonceFile.txt", "w"); // overwrite previous
+  if (!nonceFile) {
+    Serial.println("Failed to open nonce file for writing");
+    return;
+  }
+
+  nonceFile.println(nonce);
+  nonceFile.close();
+
+  Serial.print(" Stored new nonce: ");
+  Serial.println(nonce);
+}
+
+
+// void resetMemory(){
+//     pzems1.resetEnergy();
+//     EEPROM.put(unit_addr, float(0.02));
+//     EEPROM.commit();
+// }
+
+void initializeMemory1() {
+  if (!LittleFS.begin(true)) {
+    Serial.println("LittleFS mount failed");
+    return;
+  }
+  Serial.println("LittleFS mounted");
+
+  // ---------- Nonce File ----------
+  if (!LittleFS.exists("/nonceFile.txt")) {
+    Serial.println("Nonce file missing. Creating default.");
+    nonceFile = LittleFS.open("/nonceFile.txt", "w");
+    if (nonceFile) {
+      nonceFile.println("");  // empty default
+      nonceFile.close();
+    }
+  }
+
+  // Read nonce
+  nonceFile = LittleFS.open("/nonceFile.txt", "r");
+  if (nonceFile) {
+    String storedNonce = nonceFile.readStringUntil('\n');
+    nonceFile.close();
+    storedNonce.trim();
+    strncpy(lastNonce, storedNonce.c_str(), sizeof(lastNonce));
+    Serial.print("Last Nonce: ");
+    Serial.println(lastNonce);
+  } else {
+    Serial.println("Failed to read nonce file. Resetting.");
+    strcpy(lastNonce, "");
+  }
+
+  // ---------- Unit File ----------
+  if (!LittleFS.exists("/unitFile.txt")) {
+    Serial.println("Unit file missing. Creating default 0.0");
+    unitFile = LittleFS.open("/unitFile.txt", "w");
+    if (unitFile) {
+      unitFile.println("0.0");
+      unitFile.close();
+    }
+  }
+
+  // Read availableUnit
+  unitFile = LittleFS.open("/unitFile.txt", "r");
+  if (unitFile) {
+    String unitStr = unitFile.readStringUntil('\n');
+    unitFile.close();
+    unitStr.trim();
+    availableUnit = unitStr.toFloat();
+    if (isnan(availableUnit)) {
+      Serial.println("Unit value corrupt. Resetting to 0.0");
+      availableUnit = 0.0;
+    }
+    Serial.print("Available Unit: ");
+    Serial.println(availableUnit);
+  }
+
+
+  
+}
+
+
+
+
+
+bool resetEnergyBlocking() {
+  unsigned long start = millis();
+
+  while (true) {
+    if (pzems1.resetEnergy()) {
+      Serial.println("PZEM energy reset successful");
+      return true;
+    }
+
+    // Log once every second
+    if (millis() - start >= 1000) {
+      Serial.println("Waiting for PZEM energy reset...");
+      start = millis();
+    }
+
+    delay(100);        // allow FreeRTOS + BLE to run
+    yield();           // critical on ESP32
+  }
+}
+
+
+
+// ======================== Core Logic ========================
+String extractEncryptedData(String request) {
+  String prefix = "/device-top-up/";
+  int start = request.indexOf(prefix);
+  if (start == -1) return "";
+
+  start += prefix.length();
+  int end = request.indexOf(' ', start);
+  if (end == -1) return "";
+
+  return request.substring(start, end);
+}
+
+float handleData(String request) {
+  // String encrypted = extractEncryptedData(request);
+  String encrypted = request;
+  if (encrypted.length() == 0) {
+    Serial.println(" Failed to extract encrypted data.");
+    return -99;
+  }
+  Serial.print("The encrypted data: ");
+  Serial.println(encrypted);
+
+  const char* encryptedChar = encrypted.c_str();
+  char* result = decrypt(encryptedChar, key);
+  Serial.print("result: ");
+  Serial.println(result);
+
+  char* nonce = strtok(result, ":");
+  char* amount = strtok(NULL, ":");
+  char* meter = strtok(NULL, ":");
+  char* secondsStr = strtok(NULL, ":");
+  long remainingSeconds = atol(secondsStr);
+
+  if (!(nonce && amount && meter)) {
+    Serial.println(" Invalid top-up format.");
+    return -99;
+  }
+
+  Serial.print("Nonce: ");  Serial.println(nonce);
+  Serial.print("Amount: "); Serial.println(amount);
+  Serial.print("Meter: "); Serial.println(meter);
+  Serial.print("Seconds: "); Serial.println(secondsStr);
+
+  if (strcmp(meter, meterNo.c_str()) != 0) {
+    Serial.println(" Meter mismatch. Rejecting top-up.");
+    return -99;
+  }
+
+  // ---------- Update timeSeconds ----------
+  timeSeconds = remainingSeconds;
+  countdownFile = LittleFS.open("/countdownFile.txt", "w");
+  if (countdownFile) {
+    countdownFile.println(timeSeconds);
+    countdownFile.close();
+  }
+
+  // ---------- Update availableUnit ----------
+  float floatAmount = atof(amount);
+  float newBalance = floatAmount + (availableUnit - energy);
+  availableUnit = newBalance;
+
+  unitFile = LittleFS.open("/unitFile.txt", "w");
+  if (unitFile) {
+    unitFile.println(availableUnit);
+    unitFile.close();
+  }
+
+  // ---------- Reset energy ----------
+  resetEnergyBlocking();
+
+
+  // ---------- Store nonce ----------
+  storeNonce(nonce);
+
+  Serial.println("Top-up completed and new nonce stored.");
+
+  return newBalance;
+}
+
+
+
+
+
+
+
+
+void writeStateOff() {
+  lc.clearMatrix();
+  // Display V O L T -
+  lc.setRow(0,7, B1011011);  // s
+  lc.setRow(0,6, B0001111);  // t
+  lc.setRow(0,5, B1110111);  // a
+  lc.setRow(0,4, B0001111);  // t
+  lc.setRow(0,3, B0001001);  // -
+  lc.setRow(0,2, B0011101);  // o
+  lc.setRow(0,1, B1000111);  // f
+  lc.setRow(0,0, B1000111);  // f
+
+}
+
+
+
+void writeStateOn() {
+  lc.clearMatrix();
+  // Display V O L T -
+  lc.setRow(0,7, B1011011);  // s
+  lc.setRow(0,6, B0001111);  // t
+  lc.setRow(0,5, B1110111);  // a
+  lc.setRow(0,4, B0001111);  // t
+  lc.setRow(0,3, B0001001);  // -
+  lc.setRow(0,2, B0011101);  // o
+  lc.setRow(0,1, B0010101);  // n
+
+}
+
+
+
+void writeVol(int value) {
+  lc.clearMatrix();
+  // Display V O L T -
+  lc.setRow(0,7, B0111110);  // V
+  lc.setRow(0,6, B0011101);  // O
+  lc.setRow(0,5, B0001110);  // L
+  lc.setRow(0,4, B0001111);  // T
+  lc.setRow(0,3, B0001001);  // -
+  //delay(delaytime);
+
+  // Extract digits (hundreds, tens, ones)
+  int hundreds = (value / 100) % 10;
+  int tens     = (value / 10) % 10;
+  int ones     = value % 10;
+
+  // Display digits
+  lc.setChar(0,2, hundreds, false);
+  lc.setChar(0,1, tens, false);
+  lc.setChar(0,0, ones, false);
+}
+
+
+
+// // writePower: writes "POWER" then a 3-digit value (hundreds,tens,ones)
+// // Rows: 7=P, 6=O, 5=W, 4=E, 3=R, 2=hundreds, 1=tens, 0=ones
+void writePower(int value) {
+  lc.clearMatrix();
+  // Letters at rows 7..3
+  lc.setRow(0,7, B1001110);  // C
+  lc.setRow(0,6, B1111110);  // O
+  lc.setRow(0,5, B1110110);  // n
+  //lc.setRow(0,4, B0111101);  // d
+  lc.setRow(0,4, B0001001);  // =
+
+  // Limit 0–9999
+  if (value < 0) value = 0;
+  if (value > 9999) value = 9999;
+
+  // Extract 4 digits
+  int thousands = (value / 1000) % 10;
+  int hundreds  = (value / 100) % 10;
+  int tens      = (value / 10) % 10;
+  int ones      = value % 10;
+
+  // Display 4 digits on rows 2,1,0, and use row? (depending on your layout)
+  lc.setChar(0,3, thousands, false);
+  lc.setChar(0,2, hundreds,  false);
+  lc.setChar(0,1, tens,      false);
+  lc.setChar(0,0, ones,      false); // if you prefer all 4 together, tell me rows available
+}
+
+
+void writeUnit(int value) {
+    // Letters using mapping bit6..bit0 = A..G
+    lc.clearMatrix();
+    lc.setRow(0,7, B0111110);  // U
+    lc.setRow(0,6, B0010101);  // n
+    lc.setRow(0,5, B0001111);  // t
+    lc.setRow(0,4, B0001001);  // =
+
+    // Limit value to 0..9999
+    if (value < 0) value = 0;
+    if (value > 9999) value = 9999;
+
+    // Extract digits (thousands, hundreds, tens, ones)
+    int thousands = (value / 1000) % 10;
+    int hundreds  = (value / 100) % 10;
+    int tens      = (value / 10) % 10;
+    int ones      = value % 10;
+
+    // Display digits using setChar (CodeB digits)
+    lc.setChar(0,3, thousands, false);
+    lc.setChar(0,2, hundreds, false);
+    lc.setChar(0,1, tens, false);
+    lc.setChar(0,0, ones, false);
+}
+
+
+void writeSecondsRemaining() {
+  lc.clearMatrix();
+    // Letters: "sec="
+    lc.setRow(0,7, B1011011);  // s
+    lc.setRow(0,6, B1101111);  // e
+    lc.setRow(0,5, B1001110);  // c
+    lc.setRow(0,4, B0001001);  // =
+
+    long value = timeSeconds;
+
+    // Use only the last 4 digits
+    value = value % 10000;
+
+    if (value < 0) value = 0;
+
+    // Extract digits
+    int thousands = (value / 1000) % 10;
+    int hundreds  = (value / 100) % 10;
+    int tens      = (value / 10) % 10;
+    int ones      = value % 10;
+
+    // Display
+    lc.setChar(0,3, thousands, false);
+    lc.setChar(0,2, hundreds, false);
+    lc.setChar(0,1, tens, false);
+    lc.setChar(0,0, ones, false);
+}
+
+
+
+
+void processDataAndNotify() {
+  if (!deviceConnected) return;
+  //Serial.println("ble is connected, data is processing...");
+
+  StaticJsonDocument<50> doc;
+  doc["remainingUnit"] = max(0.0f, availableUnit - energy);
+  doc["voltage"] = voltage;
+  doc["relayState"] = relayState;
+  doc["power"] = power;
+  doc["timeSeconds"] = timeSeconds;
+  doc["meterNo"] = meterNo;
+
+  char buffer[200];
+  size_t n = serializeJson(doc, buffer);
+
+  pCharacteristic->setValue((uint8_t*)buffer, n);  // cast char* to uint8_t*
+  pCharacteristic->notify();
+
+  //Serial.print("Sent BLE JSON: ");
+  //Serial.println(buffer);
+}
+
+
+
+
+void readPzem() {
+    static unsigned long lastPzemRead = 0; // remembers between calls
+    const unsigned long PZEM_INTERVAL = 1000;
+
+    unsigned long now = millis();
+    if (now - lastPzemRead >= PZEM_INTERVAL) {
+        lastPzemRead = now;
+        voltage = pzems1.voltage();
+        energy  = pzems1.energy();
+        power   = pzems1.power();
+    }
+}
+
+
+void debugReadings() {
+  //#define DEBUGPZEM
+   readPzem();
+    // if (voltage <= 0 || isnan(voltage)) return;
+    // if (energy <= 0 || isnan(energy)) return;
+    // if (power <= 0 || isnan(power)) return;
+    unsigned long now = millis();
+
+  // Call every 5 seconds
+  if (now - lastNotify >= 1000) {
+    lastNotify = now;
+    //processDataAndNotify();
+  }
+
+
+
+     //unsigned long now = millis();
+
+  // First valid run: immediately display VOLT and set timer
+  if (lastDisplayMillis == 0) {
+    lastDisplayMillis = now;
+    displayState = 0;
+    writeVol((int)voltage);         // show voltage first
+    return;
+  }
+
+
+     if (now - lastDisplayMillis >= DISPLAY_INTERVAL) {
+    // advance state in order 0 -> 1 -> 2 -> 0 ...
+    displayState = (displayState + 1) % 5;
+    lastDisplayMillis = now;
+     #ifdef DEBUGPZEM
+
+    Serial.println("=== PZEM Reading ===");
+    Serial.print("Voltage: "); Serial.println(voltage);
+    //Serial.print("Current: "); Serial.println(current);
+    Serial.print("Power: "); Serial.println(power);
+    Serial.print("Energy: "); Serial.println(energy);
+    //Serial.print("Power Factor: "); Serial.println(powerFactor);
+    Serial.println();
+    #endif
+      int displayValue;
+    switch (displayState) {
+      case 0:
+        writeVol((int)voltage);
+        break;
+
+      case 1:
+        // use measured power (or cast/scale as needed)
+        writePower((int)power);    // replace with whatever numeric you want
+        break;
+
+      case 2:
+        // use measured energy or some other unit value
+        displayValue = (int)max(0.0f, availableUnit - energy);
+        //displayValue = availableUnit - energy;
+        writeUnit(displayValue);
+        break;
+      case 3:
+        if (relayState == true){
+          writeStateOn();
+        }
+        if (relayState == false){
+         writeStateOff();
+        }
+      
+        break;
+      case 4:
+        writeSecondsRemaining();
+        break;
+
+    }
+}
+  
+}
+
+
+
+void calConsumption() {
+  if (((availableUnit - energy) >= 0.01) && (relayState == false) && (timeSeconds > 0)) {
+    digitalWrite(relay1, 0);  // Power ON
+    digitalWrite(relay2, 1);  // Power ON
+    delay(30);
+    digitalWrite(relay1, 0);  // Power ON
+    digitalWrite(relay2, 0);  // Power ON
+    relayState = true;
+    Serial.println("Relay on");
+  }
+
+
+
+   if ((((availableUnit - energy) < 0.01) && (relayState == true)) || ((timeSeconds<=0) && (relayState == true))) {
+    digitalWrite(relay1, 1);  // Power ON
+    digitalWrite(relay2, 0);  // Power OFF
+    delay(30);
+    digitalWrite(relay1, 0);  // 
+    digitalWrite(relay2, 0);  // 
+    relayState = false;
+    Serial.println("relay off");
+  }
+}
+
+
+
+
+void saveTimeToFS(uint32_t value) {
+  File f = LittleFS.open(TIME_FILE, "w");
+  if (!f) return;
+  f.print(value);
+  f.close();
+}
+
+uint32_t loadTimeFromFS() {
+  if (!LittleFS.exists(TIME_FILE)) return 0;
+
+  File f = LittleFS.open(TIME_FILE, "r");
+  if (!f) return 0;
+
+  uint32_t v = f.parseInt();
+  f.close();
+  return v;
+}
+
+
+
+
+void countDown() {
+  static unsigned long lastSecondTick = 0;
+  static unsigned long lastFsWrite   = 0;
+
+  unsigned long now = millis();
+
+  // deduct every 1 second
+  if (now - lastSecondTick >= 1000) {
+    lastSecondTick = now;
+
+    if (timeSeconds > 0) {
+      timeSeconds--;
+    }
+  }
+
+  // write to LittleFS every 5 minutes (300,000 ms)
+  if (now - lastFsWrite >= 10000) {
+    lastFsWrite = now;
+    saveTimeToFS(timeSeconds);
+  }
+}
+
+
+void bleCheck(){
+   if (deviceConnected) {
+    pCharacteristic->setValue("Device Connected");
+    pCharacteristic->notify();
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//-----------BLE code begins -----------------//
+
+
+class MyServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer* pServer) {
+    deviceConnected = true;
+  }
+  void onDisconnect(BLEServer* pServer) {
+    deviceConnected = false;
+    BLEDevice::startAdvertising();
+  }
+};
+
+
+
+
+class MyCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic *pChar) override {
+    std::string value = pChar->getValue();
+    if (value.length() == 0) return;
+
+    String request = String(value.c_str());
+    Serial.print("Received via BLE: ");
+    Serial.println(request);
+
+    // ---- Parse JSON ----
+    StaticJsonDocument<400> doc;
+    DeserializationError err = deserializeJson(doc, request);
+
+    if (err) {
+      Serial.println("JSON parse failed");
+      pChar->setValue("ERR:INVALID_JSON");
+      pChar->notify();
+      return;
+    }
+
+    // ---- Extract action ----
+    const char* action = doc["action"];
+    if (!action) {
+      pChar->setValue("ERR:NO_ACTION");
+      pChar->notify();
+      return;
+    }
+
+    String response;
+
+    // ---- Action routing ----
+    if (strcmp(action, "load_credit") == 0) {
+
+      const char* token = doc["value"];
+      if (!token) {
+        pChar->setValue("ERR:NO_VALUE");
+        pChar->notify();
+        return;
+      }
+
+      float newBalance = handleData(String(token));
+
+      float remaining = max(0.0f, availableUnit - energy);
+
+      response = String(remaining) + "," +
+                 String(voltage) + "," +
+                 relayState + "," +
+                 String(power) + "," +
+                 String(timeSeconds) + "," +
+                 String(meterNo);
+
+    }
+    else if (strcmp(action, "get_status") == 0) {
+
+      float remaining = max(0.0f, availableUnit - energy);
+
+      response = String(remaining) + "," +
+                 String(voltage) + "," +
+                 relayState + "," +
+                 String(power) + "," +
+                 String(timeSeconds) + "," +
+                 String(meterNo);
+
+    }
+    else {
+      response = "ERR:UNKNOWN_ACTION";
+    }
+
+    // ---- Send response ----
+    pChar->setValue(response.c_str());
+    pChar->notify();
+
+    Serial.print("Sent BLE response: ");
+    Serial.println(response);
+
+    // Optional: clear characteristic
+    pChar->setValue("");
+  }
+};
+
+
+
+
+
+
+void setupBle(){
+  BLEDevice::init("M87800000003");
+  BLEServer *pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MyServerCallbacks());
+
+  BLEService *pService = pServer->createService(SERVICE_UUID);
+
+  pCharacteristic = pService->createCharacteristic(
+    CHARACTERISTIC_UUID,
+    BLECharacteristic::PROPERTY_READ |
+    BLECharacteristic::PROPERTY_WRITE |
+    BLECharacteristic::PROPERTY_NOTIFY
+  );
+
+  pCharacteristic->addDescriptor(new BLE2902());
+  pCharacteristic->setCallbacks(new MyCallbacks());
+  pCharacteristic->setValue(hardcodedMsg);
+
+  pService->start();
+
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pAdvertising->setScanResponse(true);
+  BLEDevice::startAdvertising();
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ======================== Setup & Loop ========================
+void setup() {
+  Serial.begin(115200);
+  delay(50);
+  Serial.println("Starting now...");
+
+  
+  pinMode(relay1, OUTPUT);
+  pinMode(relay2, OUTPUT);
+
+
+  digitalWrite(relay1, 0);
+  digitalWrite(relay2, 0);
+  delay(30);
+
+  //reset relay to off position
+    digitalWrite(relay1, 1);  //
+    digitalWrite(relay2, 0);  // 
+    delay(30);
+    digitalWrite(relay1, 0);  // 
+    digitalWrite(relay2, 0);  // 
+
+  //setupWifi();
+//  initializeMemory();
+  initializeMemory1();
+  timeSeconds = loadTimeFromFS();
+  Serial.print("timeSeconds: ");
+  Serial.println(timeSeconds);
+  //setupBle();
+  lc=LedController<1,1>(DIN,CLK,CS);
+  lc.setIntensity(8); /* Set the brightness to a medium values */
+  lc.clearMatrix(); /* and clear the display */
+  delay(100);
+}
+
+
+
+
+void loop() {
+  debugReadings();
+  calConsumption();
+  countDown();
+  
+}
+
+
+
+

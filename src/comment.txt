@@ -1,0 +1,14 @@
+1. The esp32 consumes less than 20mA on normal cpu 
+2. Consumes 150mA sharp with wifi broadcast
+3. 70mA for bluetooth (but I think only when sending)
+4. PCB2 RX => 16
+5. TX => 4
+6. Power consumption with screen and bluetooth is 110mA
+
+
+1. Previous meter consumes 0.12 on normal operation
+   without screen with wifi. (12-3.3v x 0.12A = 1.04W)
+2. Everything in total uses (12v-3.3 x 0.15A = 1.305W)
+3. Power consumption on the new pcb (altogether) is (12v-3.3 x 0.12A = 1.04W)
+4. Power consumption on the new pcb when
+   user tries to connect ble (12v-3.3 x 0.16A = 1.392W)
