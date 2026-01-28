@@ -12,3 +12,7 @@
 3. Power consumption on the new pcb (altogether) is (12v-3.3 x 0.12A = 1.04W)
 4. Power consumption on the new pcb when
    user tries to connect ble (12v-3.3 x 0.16A = 1.392W)
+
+
+on the other hand, for the previous meter, wifi could peak 400mA or more, lets assume
+500mA

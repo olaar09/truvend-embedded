@@ -19,8 +19,7 @@
 
 
 // ======================== Configuration ========================
-String meterNo = "M87800000001";
-//String bluetoothName = "M87800000003";
+String meterNo = "M87800000002";
 #define DIN 18
 #define CS 19
 #define CLK 21
@@ -152,6 +151,13 @@ bool isNonceValid(const char* newNonce) {
     return false;
   }
 }
+
+
+
+
+
+
+
 
 
 void initializeMemory1() {
@@ -289,6 +295,7 @@ float handleData(String request) {
   Serial.print("Meter: "); Serial.println(meter);
   Serial.print("Seconds: "); Serial.println(secondsStr);
 
+  
   if (strcmp(meter, meterNo.c_str()) != 0) {
     Serial.println(" Meter mismatch. Rejecting top-up.");
     return -99;
@@ -314,8 +321,15 @@ storeNonce(nonce);
 
   // ---------- Update availableUnit ----------
   float floatAmount = atof(amount);
-  float newBalance = floatAmount + (availableUnit - energy);
-  availableUnit = newBalance;
+  float newBalance;
+  if (floatAmount < 0){
+    newBalance = 0;
+    availableUnit = newBalance;
+  }
+  else{
+    newBalance = floatAmount + (availableUnit - energy);
+    availableUnit = newBalance;
+  }
 
   unitFile = LittleFS.open("/unitFile.txt", "w");
   if (unitFile) {
@@ -778,15 +792,8 @@ class MyCallbacks : public NimBLECharacteristicCallbacks {
     void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) override {
         std::string value = pCharacteristic->getValue();
         if (value.length() == 0) return;
-        
-
         BleValue = String(value.c_str());
-        //Serial.print("Received via NimBLE: ");
-        //Serial.println(BleValue);
         bleActionPending = true;
-
-    
-
     }
 };
 
@@ -794,7 +801,7 @@ class MyCallbacks : public NimBLECharacteristicCallbacks {
 
 
 void setupBle(){
-NimBLEDevice::init("M87800000001");
+NimBLEDevice::init("M87800000002");
  NimBLEDevice::setMTU(23);
 
 pServer = NimBLEDevice::createServer();
@@ -818,7 +825,7 @@ pCharacteristic->createDescriptor(NimBLEUUID((uint16_t)0x2902));
 pService->start();
 
 NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
-pAdvertising->setName("M87800000001");
+pAdvertising->setName("M87800000002");
 pAdvertising->addServiceUUID(SERVICE_UUID);
 pAdvertising->enableScanResponse(true);
 pAdvertising->start();
@@ -848,6 +855,7 @@ void setup() {
   pinMode(relay2, OUTPUT);
   initializeMemory1();
   //resetNonceFile();
+  // i should add something that calls relay state once during boot. 
   timeSeconds = loadTimeFromFS();
   Serial.print("timeSeconds: ");
   Serial.println(timeSeconds);
@@ -855,11 +863,10 @@ void setup() {
   lc=LedController<1,1>(DIN,CLK,CS);
   lc.setIntensity(2); /* Set the brightness to a medium values */
   lc.clearMatrix(); /* and clear the display */
-  delay(100);
-  Serial.println(esp_reset_reason());
-  delay(100);
-  debugReadings();
-  delay(100);
+  delay(500);
+  readPzem();
+  delay(1000);
+ 
 
   //2619
 
