@@ -94,7 +94,8 @@ void CloudClient::sendRequest(const String& url)
 
     if (id != -1)
     {
-        String ackUrl = "http://iot.truvend.online/iot/ack_commands/87800000004?success_command_ids=" + String(id);
+        String ackUrl = "http://iot.truvend.online/iot/ack_commands/" + String(meterNo) + "?success_command_ids=" + String(id);
+        
 
         http.begin(ackUrl);
         http.addHeader("Authorization", "Bearer " + _jwtToken);

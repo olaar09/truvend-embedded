@@ -12,14 +12,22 @@
 // const char* password = "olamide12121";
 
 
+
+
+
+// =================Setup files ============
 const char* ssid = "Jossy";
 const char* password = "olamide12121";
-
-
+String meterNo = "87800000004";
 String jwtToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJkZXZpY2VfaW52ZW50b3J5X3JlZiI6Ijg3ODAwMDAwMDA0Iiwic2NvcGUiOiJpb3RfZGV2aWNlIiwiaWF0IjoxNzcyOTc3OTA4LCJleHAiOjE4MDg5Nzc5MDh9.Cu9aiXUzuUT62-9wlixw8veKhoXCcDDB7ppDQgEIoLY";
 
-String url = "http://iot.truvend.online/iot/set_status/87800000004?action=set_status&balance=49&relay=on&power=118&energy=23&seconds=609997&meter_number=87800000004";
-String getDataUrl = "http://iot.truvend.online/iot/get_command/87800000004";
+
+
+
+
+
+//String url = "http://iot.truvend.online/iot/set_status/87800000004?action=set_status&balance=49&relay=on&power=118&energy=23&seconds=609997&meter_number=87800000004";
+//String getDataUrl = "http://iot.truvend.online/iot/get_command/87800000004";
 
 CloudClient cloud(ssid, password, jwtToken);
 //const unsigned long RESTART_INTERVAL = 6UL * 60UL * 60UL * 1000UL; // 6 hours in ms
@@ -89,6 +97,7 @@ void checkServerData()
                 Serial.println("Restarting Meter...");
                 ESP.restart(); //Restart
             }
+            String getDataUrl = "http://iot.truvend.online/iot/get_command/" + String(meterNo);
             cloud.sendRequest(getDataUrl);
             sendUpdate();
         }
@@ -339,7 +348,7 @@ void setup()
     powerMeter.begin(Serial2, PZEM_RX, PZEM_TX);
     relay.begin(RELAY1, RELAY2);
     display.begin(DIN, CLK, CS);
-    ble.begin(meterNo1.c_str());
+    ble.begin(meterNo.c_str());
 
     xTaskCreate(bleTask,"BLE Task",8096,NULL,1,NULL);
     xTaskCreate(meterTask,"Meter Task",6096,NULL,0,NULL);

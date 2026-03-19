@@ -12,8 +12,7 @@
 #define PZEM_TX 16
 #define RELAY1 5
 #define RELAY2 17
-String meterNo = "87800000004";
-String meterNo1 = "87800000004";
+
 
 
 // ================= Runtime Variables =================
