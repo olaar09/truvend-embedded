@@ -14,6 +14,7 @@ public:
     bool actionPending();
 
     String getValue();
+    void stop();
 
     void send(String msg);
 

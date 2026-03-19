@@ -52,3 +52,8 @@ automatically start bluetooth if wifi is out
 convert code to freeRTOS
 solve BLE issue, make it work fast and initialize well
 check order
+
+
+Reset energy bug
+Balance bug
+Balance being sent to the app is wrong

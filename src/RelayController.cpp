@@ -14,7 +14,7 @@ void RelayController::turnOn()
     digitalWrite(relay1,0);
     digitalWrite(relay2,1);
 
-    delay(30);
+    delay(50);
 
     digitalWrite(relay1,0);
     digitalWrite(relay2,0);
@@ -27,7 +27,7 @@ void RelayController::turnOff()
     digitalWrite(relay1,1);
     digitalWrite(relay2,0);
 
-    delay(30);
+    delay(50);
 
     digitalWrite(relay1,0);
     digitalWrite(relay2,0);

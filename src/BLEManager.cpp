@@ -1,5 +1,6 @@
 #include "BLEManager.h"
 #include <NimBLEDevice.h>
+#include "esp_bt.h"
 
 static NimBLECharacteristic* pCharacteristic;
 static bool deviceConnected=false;
@@ -33,6 +34,26 @@ class ServerCallbacks: public NimBLEServerCallbacks {
         NimBLEDevice::startAdvertising();
     }
 };
+
+
+void BLEManager::stop()
+{
+    NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
+    if (adv) adv->stop();
+
+    NimBLEDevice::deinit(true);   // destroy NimBLE stack
+
+    if (esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_ENABLED) {
+        esp_bt_controller_disable();
+        esp_bt_controller_deinit();
+    }
+
+    deviceConnected = false;
+    pending = false;
+    pCharacteristic = nullptr;
+
+    Serial.println("BLE stopped");
+}
 
 void BLEManager::begin(const char* name)
 {

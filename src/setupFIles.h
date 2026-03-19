@@ -17,11 +17,11 @@ String meterNo1 = "87800000004";
 
 
 // ================= Runtime Variables =================
-float availableUnits = 0;
+
 float energy = 0;
 float voltage = 0;
 float power = 0;
-uint32_t timeSeconds = 0;
+//uint32_t timeSeconds = 0;
 String relayState = "off";
 
 

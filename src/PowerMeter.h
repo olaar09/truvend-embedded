@@ -22,9 +22,9 @@ private:
 
     PZEM004Tv30* pzem;
 
-    float v;
-    float p;
-    float e;
+    float v = 0;
+    float p = 0;
+    float e = 0;
 
     unsigned long lastRead = 0;
 

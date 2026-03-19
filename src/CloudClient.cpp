@@ -2,6 +2,7 @@
 #include "CommandParser.h"
 #include <DecryptHandler.h>
 #include <MeterLogic.h>
+#include <addFile.h>
 
 MeterLogic loadmeter;
 CommandParser parser;
@@ -25,9 +26,11 @@ void CloudClient::begin()
 
     while (WiFi.status() != WL_CONNECTED)
     {
-        delay(500);
+        wifiCon = false;
+        vTaskDelay(pdMS_TO_TICKS(500));
         Serial.print(".");
     }
+    wifiCon = true;
 
     Serial.println();
     Serial.println("WiFi connected");
@@ -36,10 +39,12 @@ void CloudClient::sendRequest(const String& url)
 {
      if (WiFi.status() != WL_CONNECTED)
         {
+            wifiCon = false;
             WiFi.disconnect();
             WiFi.begin(_ssid, _password);
             return;
         }
+        wifiCon = true;
 
 
     serverRUnning = true;
@@ -70,8 +75,9 @@ void CloudClient::sendRequest(const String& url)
 
             Serial.print("Command ID: ");
             Serial.println(id);
-
-            Serial.println(loadmeter.handleTopup(payloadData));
+            newBalanceTop = loadmeter.handleTopup(payloadData);
+            Serial.print("The new balance is: ");
+            Serial.println(newBalanceTop);
         }
     }
     else

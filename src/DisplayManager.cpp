@@ -92,7 +92,7 @@ void DisplayManager::showState(bool on)
         lc.setRow(0,6, B0001111);  // t
         lc.setRow(0,5, B1110111);  // a
         lc.setRow(0,4, B0001111);  // t
-        lc.setRow(0,3, B0001001);  // -
+        lc.setRow(0,3, B0001001);  // =
         lc.setRow(0,2, B0011101);  // o
         lc.setRow(0,1, B0010101);  // n
     }
@@ -108,8 +108,8 @@ void DisplayManager::showState(bool on)
     }
 }
 
-/*
-void DisplayManager::showCountdown()
+
+void DisplayManager::showCountdown(int countValue)
 {
     lc.clearMatrix();
 
@@ -118,7 +118,7 @@ void DisplayManager::showCountdown()
     lc.setRow(0,5, B1011011);  // s
     lc.setRow(0,4, B0001001);  // =
 
-    long value = timeSeconds/3600;
+    long value = countValue;
 
     // Use only the last 4 digits
     value = value % 10000;
@@ -138,4 +138,29 @@ void DisplayManager::showCountdown()
     lc.setChar(0,0, ones, false);
 }
 
-*/
+
+
+
+
+void DisplayManager::wifi(bool on)
+{
+    lc.clearMatrix();
+
+    if(on){
+        lc.setRow(0,7, B1110110);  // n
+        lc.setRow(0,6, B1101111);  // e
+        lc.setRow(0,5, B0001111);  // T
+        lc.setRow(0,4, B0001001);  // =
+        lc.setRow(0,3, B0011101);  // O
+        lc.setRow(0,2, B0010101);  // N
+    }
+    else{
+        lc.setRow(0,7, B1110110);  // n
+        lc.setRow(0,6, B1101111);  // e
+        lc.setRow(0,5, B0001111);  // T
+        lc.setRow(0,4, B0001001);  // =
+        lc.setRow(0,3, B0011101);  // O
+        lc.setRow(0,2, B1000111);  // F
+        lc.setRow(0,1, B1000111);  // F
+    }
+}

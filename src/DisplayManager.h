@@ -14,8 +14,10 @@ public:
     void showPower(int value);
     void showUnits(int value);
     void showSeconds(long sec);
+    void showCountdown(int countValue);
 
     void showState(bool on);
+    void wifi(bool on);
 
 private:
 

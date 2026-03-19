@@ -7,13 +7,17 @@ void PowerMeter::begin(HardwareSerial& serial,int rx,int tx)
 
 void PowerMeter::update()
 {
-    if(millis() - lastRead < 4000) return;
+    if (millis() - lastRead < 4000) return;
 
     lastRead = millis();
 
-    v = pzem->voltage();
-    p = pzem->power();
-    e = pzem->energy();
+    float rv = pzem->voltage();
+    float rp = pzem->power();
+    float re = pzem->energy();
+
+    if (!isnan(rv)) v = rv;
+    if (!isnan(rp)) p = rp;
+    if (!isnan(re)) e = re;
 }
 
 float PowerMeter::voltage()
