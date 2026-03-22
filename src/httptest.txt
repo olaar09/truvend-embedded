@@ -1,0 +1,72 @@
+
+//load_token capital
+
+//{"device_id":"87800000004"
+//,"jwt":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJkZXZpY2VfaW52ZW50b3J5X3JlZiI6Ijg3ODAwMDAwMDA0Iiwic2NvcGUiOiJpb3RfZGV2aWNlIiwiaWF0IjoxNzcyOTc3OTA4LCJleHAiOjE4MDg5Nzc5MDh9.Cu9aiXUzuUT62-9wlixw8veKhoXCcDDB7ppDQgEIoLY"
+//,"issued_at":"2026-03-08T13:51:48.635Z","status":"setup_sent"}
+
+// http://iot.truvend.online/iot/test_command/87800000004?cmd=LOAD_TOKEN&p=RUVCRFBbU0ZGVUpMXF5gS1JbQlVEHVtVSBoIAgcNRkJFRg==
+
+// {
+//   "action": "load_credit",
+//   "value": "RUVCRFBbU0ZGVUpMXF5gS1JbQlVEHVtVSBoIAgcNRkJFRg=="
+// }
+
+// iot.truvend.online/iot/get_command/87800000004
+
+
+// iot.truvend.online?action=set_status&balance=49&relay=on&power=118&energy=23&seconds=609997&meter_number=87800000004
+
+// iot.truvend.online/iot/debug/meter/87800000004
+
+
+
+
+//httpGetRequest1("iot.truvend.online", "/iot/ack_command/87800000004/" + String(ids[0]) + "?status=ok");
+//Here: /iot/ack_commands/87800000004?success_command_ids=101,102&failed_command_ids=0
+//String url = "http://iot.truvend.online?action=set_status&balance=49&relay=on&power=118&energy=409&seconds=609997&meter_number=87800000004";
+
+
+//http://iot.truvend.online/set_status/<device_id>?action=set_status&balance=49&relay=on&power=118&energy=23&seconds=609997&meter_number=87800000004
+
+
+
+//curl "http://iot.truvend.online/iot/set_status/87800000004?action=set_status&balance=49&relay=on&power=118&energy=23&seconds=609997&meter_number=87800000004" -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJkZXZpY2VfaW52ZW50b3J5X3JlZiI6Ijg3ODAwMDAwMDA0Iiwic2NvcGUiOiJpb3RfZGV2aWNlIiwiaWF0IjoxNzcyOTc3OTA4LCJleHAiOjE4MDg5Nzc5MDh9.Cu9aiXUzuUT62-9wlixw8veKhoXCcDDB7ppDQgEIoLY"
+
+
+//String url = "http://iot.truvend.online?action=set_status&balance=49&relay=on&power=118&energy=409&seconds=609997&meter_number=87800000004";
+//String url = "http://iot.truvend.online/iot/get_command/87800000004";
+
+
+
+
+The screen showed a sign, only last digit showed when I bridged the GND and VCC by 
+mistake... obvious sign of data corruption but couln't recover. 
+
+
+//need to make available unit show instantly
+upgrade the screen to show wifi/internet status
+restart meter once in a while
+check if meter is truly off during start and with load// important please...
+automatically start bluetooth if wifi is out
+convert code to freeRTOS
+solve BLE issue, make it work fast and initialize well
+check order
+
+
+Reset energy bug
+Balance bug
+Balance being sent to the app is wrong
+
+
+
+# Name,   Type, SubType, Offset,   Size,      Flags
+nvs,      data, nvs,     0x9000,   0x5000,
+otadata,  data, ota,     0xe000,   0x2000,
+app0,     app,  factory, 0x10000,  0x300000,
+spiffs,   data, littlefs,0x310000, 0x0F0000,
+
+
+
+//97.31 1.1
+//100+25
