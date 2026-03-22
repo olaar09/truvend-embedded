@@ -57,3 +57,16 @@ check order
 Reset energy bug
 Balance bug
 Balance being sent to the app is wrong
+
+
+
+# Name,   Type, SubType, Offset,   Size,      Flags
+nvs,      data, nvs,     0x9000,   0x5000,
+otadata,  data, ota,     0xe000,   0x2000,
+app0,     app,  factory, 0x10000,  0x300000,
+spiffs,   data, littlefs,0x310000, 0x0F0000,
+
+
+
+//97.31 1.1
+//100+25

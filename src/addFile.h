@@ -7,5 +7,6 @@ extern uint32_t timeSeconds;
 extern bool resetMeterL;
 extern bool wifiCon;
 extern String meterNo;
+extern float energy;
 
 #endif

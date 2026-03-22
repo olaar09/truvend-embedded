@@ -16,10 +16,10 @@
 
 
 // =================Setup files ============
-const char* ssid = "Jossy";
-const char* password = "olamide12121";
-String meterNo = "87800000004";
-String jwtToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJkZXZpY2VfaW52ZW50b3J5X3JlZiI6Ijg3ODAwMDAwMDA0Iiwic2NvcGUiOiJpb3RfZGV2aWNlIiwiaWF0IjoxNzcyOTc3OTA4LCJleHAiOjE4MDg5Nzc5MDh9.Cu9aiXUzuUT62-9wlixw8veKhoXCcDDB7ppDQgEIoLY";
+const char* ssid = "aDevXSY8TZkZcdk";
+const char* password = "u3tgYkyn2JX8gUx";
+String meterNo = "87800000072";
+String jwtToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJkZXZpY2VfaW52ZW50b3J5X3JlZiI6Ijg3ODAwMDAwMDcyIiwic2NvcGUiOiJpb3RfZGV2aWNlIiwiaWF0IjoxNzc0MjE4MjMzLCJleHAiOjIwODk3OTQyMzN9.yXH4jRHjhBSALtINju0FZNqJ7YU5eE3ihUCCPqNxnSQ";
 
 
 
@@ -44,7 +44,7 @@ float availableUnits = 0;
 uint32_t timeSeconds = 0;
 bool resetMeterL = false;
 bool wifiCon = false;
-
+float energy = 0;
 
 bool serverRUnning = false;
 

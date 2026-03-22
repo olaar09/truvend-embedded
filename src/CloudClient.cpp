@@ -22,7 +22,7 @@ void CloudClient::begin()
 
     WiFi.begin(_ssid, _password);
 
-    Serial.print("Connecting to WiFi");
+    //Serial.print("Connecting to WiFi");
 
     while (WiFi.status() != WL_CONNECTED)
     {
@@ -32,8 +32,8 @@ void CloudClient::begin()
     }
     wifiCon = true;
 
-    Serial.println();
-    Serial.println("WiFi connected");
+    //Serial.println();
+    //Serial.println("WiFi connected");
 }
 void CloudClient::sendRequest(const String& url)
 {
@@ -73,17 +73,17 @@ void CloudClient::sendRequest(const String& url)
             id = parser.getId();
             String payloadData = parser.getPayload();
 
-            Serial.print("Command ID: ");
-            Serial.println(id);
+            // Serial.print("Command ID: ");
+            // Serial.println(id);
             newBalanceTop = loadmeter.handleTopup(payloadData);
-            Serial.print("The new balance is: ");
-            Serial.println(newBalanceTop);
+            // Serial.print("The new balance is: ");
+            // Serial.println(newBalanceTop);
         }
     }
     else
     {
-        Serial.print("HTTP request failed: ");
-        Serial.println(httpCode);
+        // Serial.print("HTTP request failed: ");
+        // Serial.println(httpCode);
     }
 
     http.end();

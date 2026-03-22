@@ -59,15 +59,13 @@ float MeterLogic::handleTopup(String token)
 
 
     //work with unit and store it
-    float units = StorageManager::loadUnits();
-    float receivedAmount = atof(amount);
-//Serial.println("1");
-    if (receivedAmount == -5){
+    float units = availableUnits - energy; //So units is what my last recharge - what I have left
+    float receivedAmount = atof(amount);  //receivedAmount is what is coming in
+    if (receivedAmount == -5){ //If received amount is -5, clear both unit and received amount so all is zero
         Serial.println("clearing credit");
         units = 0;
         receivedAmount = 0;
     }
-    //Serial.println("2");
 
     float add = receivedAmount;
     units += add;
@@ -75,9 +73,7 @@ float MeterLogic::handleTopup(String token)
     StorageManager::saveUnits(units);
     availableUnits = units;
     bool resetStatus = false;
-    //Serial.println("3");
     resetMeterL = true;
-    //Serial.println("4");
     
     
 

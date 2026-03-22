@@ -17,7 +17,7 @@
 
 // ================= Runtime Variables =================
 
-float energy = 0;
+
 float voltage = 0;
 float power = 0;
 //uint32_t timeSeconds = 0;
