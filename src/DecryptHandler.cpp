@@ -1,15 +1,27 @@
 #include "DecryptHandler.h"
 #include <string.h>
 
-// ======================== Constructor ========================
+// NOTE: this class duplicates CryptoManager::decrypt. Nothing in the v1.1
+// flow calls it anymore (handleTopup uses CryptoManager), but it is kept
+// bounds-checked so it can never overflow if reintroduced. Recommended:
+// delete this file + its include in CloudClient.cpp in a later cleanup.
+
 DecryptHandler::DecryptHandler() {}
 
-// ======================== Decrypt Function ========================
 char* DecryptHandler::decrypt(const char* encoded, const char* key) {
-    static char out[80];
+    static char out[128];
     const char* b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    unsigned char temp[80];
-    int len = strlen(encoded), outLen = 0;
+    unsigned char temp[128];
+
+    if (!encoded || !key) return nullptr;
+
+    int len = strlen(encoded);
+    size_t keyLen = strlen(key);
+
+    if (len == 0 || (len % 4) != 0 || keyLen == 0) return nullptr;
+    if (((len / 4) * 3) >= (int)sizeof(temp))      return nullptr;
+
+    int outLen = 0;
 
     for (int i = 0; i < len; i += 4) {
         int b[4];
@@ -23,33 +35,29 @@ char* DecryptHandler::decrypt(const char* encoded, const char* key) {
     }
 
     for (int i = 0; i < outLen; i++) {
-        out[i] = temp[i] ^ key[i % strlen(key)];
+        out[i] = temp[i] ^ key[i % keyLen];
     }
     out[outLen] = 0;
 
     return out;
 }
 
-// ======================== Handle Data ========================
 String DecryptHandler::handleData(String request) {
 
     String encrypted = request;
 
     if (encrypted.length() == 0) {
         Serial.println(" Failed to extract encrypted data.");
-        return String("fail");;
+        return String("fail");
     }
-
-    //Serial.print("The encrypted data: ");
-    //Serial.println(encrypted);
 
     const char* encryptedChar = encrypted.c_str();
     char* result = decrypt(encryptedChar, key);
 
-    //Serial.print("result: ");
-    //Serial.println(result);
-
-    //Serial.println("Completed");
+    if (!result) {
+        Serial.println(" Decrypt failed (invalid or oversized token).");
+        return String("fail");
+    }
 
     return String(result);
 }

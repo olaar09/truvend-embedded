@@ -8,10 +8,13 @@ bool CommandParser::parse(const String& json)
     DeserializationError error = deserializeJson(doc, json);
 
     if (error)
-    {
-        //Serial.println("JSON parse failed");
         return false;
-    }
+
+    // v1.1: validate structure before touching fields.
+    // v1.0 did String((const char*)first["p"]) - a missing "p" made that
+    // String(nullptr): undefined behavior / crash.
+    if (!doc["commands"].is<JsonArray>())
+        return false;
 
     JsonArray commands = doc["commands"];
 
@@ -20,8 +23,14 @@ bool CommandParser::parse(const String& json)
 
     JsonObject first = commands[0];
 
+    if (!first["id"].is<int>() || !first["p"].is<const char*>())
+        return false;
+
     commandId = first["id"];
-    payload = String((const char*)first["p"]);
+    payload = String(first["p"].as<const char*>());
+
+    if (payload.length() == 0)
+        return false;
 
     return true;
 }

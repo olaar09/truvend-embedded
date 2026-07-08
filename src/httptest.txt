@@ -70,3 +70,11 @@ spiffs,   data, littlefs,0x310000, 0x0F0000,
 
 //97.31 1.1
 //100+25
+
+consumption at 12v is 0.5W
+
+
+output ripple of 0.1v... 100mv from the buck converter
+input without cap: 100mv ripple, but spikes
+output without cap: 150mv ripple
+way lesser with cap

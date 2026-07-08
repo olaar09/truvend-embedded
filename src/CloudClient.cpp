@@ -1,12 +1,10 @@
 #include "CloudClient.h"
 #include "CommandParser.h"
-#include <DecryptHandler.h>
 #include <MeterLogic.h>
 #include <addFile.h>
 
 MeterLogic loadmeter;
 CommandParser parser;
-DecryptHandler decryptHandler;
 
 CloudClient::CloudClient(const char* ssid, const char* password, const String& token)
 {
@@ -22,8 +20,6 @@ void CloudClient::begin()
 
     WiFi.begin(_ssid, _password);
 
-    //Serial.print("Connecting to WiFi");
-
     while (WiFi.status() != WL_CONNECTED)
     {
         wifiCon = false;
@@ -31,21 +27,18 @@ void CloudClient::begin()
         Serial.print(".");
     }
     wifiCon = true;
-
-    //Serial.println();
-    //Serial.println("WiFi connected");
 }
+
 void CloudClient::sendRequest(const String& url)
 {
-     if (WiFi.status() != WL_CONNECTED)
-        {
-            wifiCon = false;
-            WiFi.disconnect();
-            WiFi.begin(_ssid, _password);
-            return;
-        }
-        wifiCon = true;
-
+    if (WiFi.status() != WL_CONNECTED)
+    {
+        wifiCon = false;
+        WiFi.disconnect();
+        WiFi.begin(_ssid, _password);
+        return;
+    }
+    wifiCon = true;
 
     serverRUnning = true;
     id = -1;
@@ -68,22 +61,22 @@ void CloudClient::sendRequest(const String& url)
 
         Serial.print(".");
 
-        if (parser.parse(payload))
+        // parse() now validates the whole structure; a malformed or
+        // empty payload can no longer reach handleTopup.
+        if (payload.length() > 0 && parser.parse(payload))
         {
             id = parser.getId();
             String payloadData = parser.getPayload();
 
-            // Serial.print("Command ID: ");
-            // Serial.println(id);
             newBalanceTop = loadmeter.handleTopup(payloadData);
-            // Serial.print("The new balance is: ");
-            // Serial.println(newBalanceTop);
+
+            // Don't ACK a topup that failed on storage (-98): leaving it
+            // un-ACKed lets the server redeliver and the meter retry,
+            // since the nonce was NOT burned.
+            if (newBalanceTop == -98) {
+                id = -1;
+            }
         }
-    }
-    else
-    {
-        // Serial.print("HTTP request failed: ");
-        // Serial.println(httpCode);
     }
 
     http.end();
@@ -95,7 +88,6 @@ void CloudClient::sendRequest(const String& url)
     if (id != -1)
     {
         String ackUrl = "http://iot.truvend.online/iot/ack_commands/" + String(meterNo) + "?success_command_ids=" + String(id);
-        
 
         http.begin(ackUrl);
         http.addHeader("Authorization", "Bearer " + _jwtToken);

@@ -2,80 +2,99 @@
 #include "CryptoManager.h"
 #include "StorageManager.h"
 #include <addFile.h>
-#include <PowerMeter.h>
 
-PowerMeter pzemCon;
 static const char* key = "truvendprepaid-secret-key-2024";
+
+// Reject absurd recharge amounts even if the token decrypts cleanly.
+static const float MAX_TOPUP_UNITS = 100000.0f;
 
 float MeterLogic::handleTopup(String token)
 {
-    char* result = CryptoManager::decrypt(token.c_str(),key);
-    //char* result = token.c_str();
-    char* nonce = strtok(result,":");
-    char* amount = strtok(NULL,":");
-    char* meter = strtok(NULL,":");
-    char* seconds = strtok(NULL,":");
-
-    Serial.print("Nonce: ");
-    Serial.println(nonce);
-
-    Serial.print("Amount: ");
-    Serial.println(amount);
-
-    Serial.print("Meter: ");
-    Serial.println(meter);
-
-    Serial.print("Seconds: ");
-    Serial.println(seconds);
-
-    if(!(nonce && amount && meter)){
+    // ---------- decode ----------
+    char* result = CryptoManager::decrypt(token.c_str(), key);
+    if (!result) {
+        Serial.println("Topup rejected: decrypt failed / token too long");
         return -99;
     }
 
+    char* nonce   = strtok(result, ":");
+    char* amount  = strtok(NULL, ":");
+    char* meter   = strtok(NULL, ":");
+    char* seconds = strtok(NULL, ":");
 
-    if(!StorageManager::isNonceValid(nonce)){
+    // v1.0 bug: 'seconds' was never null-checked -> strtoul(NULL) crash.
+    if (!(nonce && amount && meter && seconds)) {
+        Serial.println("Topup rejected: missing fields");
         return -99;
     }
 
-    // if (atof(amount) == -10){
-    //     Serial.println("turning off supply");
-    //     return -10;
-    // }
+    Serial.print("Nonce: ");   Serial.println(nonce);
+    Serial.print("Amount: ");  Serial.println(amount);
+    Serial.print("Meter: ");   Serial.println(meter);
+    Serial.print("Seconds: "); Serial.println(seconds);
 
-    // if (atof(amount) == -11){
-    //     Serial.println("turning on supply");
-    //     return -11;
-    // }
-    
-    
+    // Token must be for THIS meter. (Comment out this block if your
+    // token generator encodes the meter field differently.)
+    if (meterNo != String(meter)) {
+        Serial.println("Topup rejected: wrong meter number");
+        return -99;
+    }
 
-    StorageManager::storeNonce(nonce); //store nonce
+    if (!StorageManager::isNonceValid(nonce)) {
+        Serial.println("Topup rejected: nonce reused/old");
+        return -99;
+    }
 
-    //work with time and store it
+    // ---------- validate amount ----------
+    float receivedAmount = strtof(amount, NULL);
+    bool clearCredit = (receivedAmount == -5.0f);   // admin: zero the balance
+
+    if (!clearCredit) {
+        if (isnan(receivedAmount) || receivedAmount <= 0.0f ||
+            receivedAmount > MAX_TOPUP_UNITS) {
+            Serial.println("Topup rejected: implausible amount");
+            return -99;
+        }
+    }
+
     uint32_t loadedTime = strtoul(seconds, NULL, 10);
-    StorageManager::saveTime(loadedTime);
-    timeSeconds = loadedTime;
-    //done
 
-
-    //work with unit and store it
-    float units = availableUnits - energy; //So units is what my last recharge - what I have left
-    float receivedAmount = atof(amount);  //receivedAmount is what is coming in
-    if (receivedAmount == -5){ //If received amount is -5, clear both unit and received amount so all is zero
-        Serial.println("clearing credit");
-        units = 0;
-        receivedAmount = 0;
+    // ---------- apply under mutex ----------
+    // BLE task and cloud task can both land here; the mutex makes the
+    // read-modify-write-save sequence atomic.
+    if (xSemaphoreTake(balanceMutex, pdMS_TO_TICKS(5000)) != pdTRUE) {
+        Serial.println("Topup deferred: balance busy");
+        return -98;   // nonce NOT burned - token can be retried
     }
 
-    float add = receivedAmount;
-    units += add;
+    float newBal;
+    if (clearCredit) {
+        Serial.println("clearing credit");
+        newBal = 0.0f;
+    } else {
+        newBal = availableUnits + receivedAmount;   // delta model: just ADD
+    }
+    if (newBal < 0.0f || isnan(newBal)) newBal = 0.0f;
 
-    StorageManager::saveUnits(units);
-    availableUnits = units;
-    bool resetStatus = false;
-    resetMeterL = true;
-    
-    
+    // Persist FIRST - balance, energy anchor and countdown time are now
+    // ONE atomic checksummed record (one flash write instead of two).
+    // Only if flash confirms do we update RAM and burn the nonce. A
+    // failed save leaves everything untouched and the token stays valid.
+    bool saved = StorageManager::saveBalance(newBal, lastEnergyKwh, loadedTime);
+    if (!saved) {
+        xSemaphoreGive(balanceMutex);
+        Serial.println("Topup failed: flash save error");
+        return -98;
+    }
 
-    return units;
+    availableUnits = newBal;
+    timeSeconds = loadedTime;
+
+    xSemaphoreGive(balanceMutex);
+
+    StorageManager::storeNonce(nonce);   // burn nonce only after success
+
+    Serial.print("Topup OK. New balance: ");
+    Serial.println(newBal);
+    return newBal;
 }
