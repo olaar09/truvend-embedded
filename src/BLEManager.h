@@ -3,23 +3,20 @@
 
 #include <Arduino.h>
 
+// NOTE: if your existing BLEManager.h has anything extra, keep it and
+// just add the ensureAdvertising() line - that's the only v1.2 change.
+
 class BLEManager {
-
 public:
-
-    void begin(const char* deviceName);
-
-    bool connected();
-
-    bool actionPending();
-
-    String getValue();
+    void begin(const char* name);
     void stop();
-
+    bool connected();
+    bool actionPending();
+    String getValue();
     void send(String msg);
 
-private:
-
+    // v1.2: advertising watchdog - call periodically from bleTask.
+    void ensureAdvertising();
 };
 
 #endif

@@ -58,7 +58,14 @@ void BLEManager::stop()
 void BLEManager::begin(const char* name)
 {
     NimBLEDevice::init(name);
-    NimBLEDevice::setMTU(23);
+
+    // v1.2: was setMTU(23). The new rich status reply
+    // (OK:balance:relay:power:energy:seconds:voltage:reason) is
+    // ~40-55 bytes; at MTU 23 a notification carries only 20 bytes and
+    // the reply would be TRUNCATED. 185 fits comfortably and is what
+    // iOS negotiates natively; Android apps must call requestMtu()
+    // (see flutter side note).
+    NimBLEDevice::setMTU(185);
 
     NimBLEServer* server = NimBLEDevice::createServer();
 
@@ -110,4 +117,22 @@ void BLEManager::send(String msg)
 
     pCharacteristic->setValue(msg.c_str());
     pCharacteristic->notify();
+}
+
+// v1.2: advertising watchdog. NimBLE restarts advertising on a clean
+// disconnect (our callback + the library's own advertiseOnDisconnect),
+// but a half-formed connection that dies, a silently-failed start, or
+// radio contention with WiFi can leave advertising dead with no
+// callback fired - meter invisible to phones until reboot. This
+// re-asserts it. Safe to call every few seconds: does nothing while a
+// phone is connected or advertising is already running.
+void BLEManager::ensureAdvertising()
+{
+    if (deviceConnected) return;
+
+    NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
+    if (adv && !adv->isAdvertising()) {
+        adv->start();
+        Serial.println("BLE watchdog: advertising restarted");
+    }
 }

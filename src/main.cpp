@@ -9,7 +9,7 @@
 #include <addFile.h>
 
 // =====================================================================
-//  v1.1-final ACCOUNTING MODEL
+//  v1.2 ACCOUNTING MODEL (unchanged from v1.1-final)
 //
 //  availableUnits = LIVE remaining balance ("what you have left").
 //    - recharge:  availableUnits += amount   (never resets, never
@@ -25,13 +25,24 @@
 //      counter survives power cuts, so the boot delta re-bills whatever
 //      was consumed after the last save. Only countdown minutes can be
 //      lost, always in the customer's favor.
+//
+//  NEW IN v1.2:
+//    - Zero-voltage protection: relay forced OFF if sensed voltage
+//      stays below 5V for 30s while the relay is on (offReason = 3).
+//      A successful recharge clears the fault (remote un-stick lever).
+//    - Off-reason codes: 0=ON, 1=no balance, 2=time expired,
+//      3=voltage fault.  Priority: 3 > 1 > 2.
+//    - BLE rich status response (colon-delimited, see buildStatusString)
+//      replacing the old bare-balance reply. App update required.
+//    - BLE advertising watchdog (re-asserts advertising every ~5s if
+//      it silently died).
 // =====================================================================
-
+//started from 457
 // ================= Setup files =================
 const char* ssid = "aDevXSY8TZkZcdk";
 const char* password = "u3tgYkyn2JX8gUx";
-String meterNo = "87800000443";
-String jwtToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJkZXZpY2VfaW52ZW50b3J5X3JlZiI6Ijg3ODAwMDAwNDQzIiwic2NvcGUiOiJpb3RfZGV2aWNlIiwiaWF0IjoxNzgzNTA4MDI0LCJleHAiOjIwOTkwODQwMjR9.Na2OlRegZO5sH6u1VM6xfx33b51uaEmSGUn9XhNSyik";
+String meterNo = "87800000517";
+String jwtToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJkZXZpY2VfaW52ZW50b3J5X3JlZiI6Ijg3ODAwMDAwNTE3Iiwic2NvcGUiOiJpb3RfZGV2aWNlIiwiaWF0IjoxNzg0ODExNzQyLCJleHAiOjIxMDAzODc3NDJ9.O4sVXRsMr8C3L65-1VqDTdMjhjyFCHOH80fDT1BnjBw";
 
 CloudClient cloud(ssid, password, jwtToken);
 const unsigned long RESTART_INTERVAL = 21600000UL;   // 6 hours
@@ -73,6 +84,65 @@ static uint8_t badDeltaStrikes = 0;
 static float lastSavedBal = -1.0f, lastSavedE = -1.0f;
 static uint32_t lastSavedTime = 0xFFFFFFFF;
 
+// ================= Display self-healing =================
+// The MAX7219 has NO reset pin: its registers power up random and rely
+// entirely on init writes. From a cold (fully drained) start the display
+// rail can still be rising when setup() runs, so those writes land
+// garbled - symptoms seen in the field: screen stays dark (stuck in
+// shutdown) or only one digit lights (scan-limit corrupted). Re-sending
+// the full init cures every variant, so we do it once shortly after
+// boot and then periodically as a watchdog.
+static uint8_t reinitStage = 0;                 // 0: pending 5s, 1: pending 30s, 2: periodic only
+static unsigned long lastDisplayReinit = 0;
+const unsigned long DISPLAY_REINIT_INTERVAL = 300000UL;   // 5 min watchdog
+
+// ================= Zero-voltage protection (NEW v1.2) =================
+// If the PZEM reports ~0V continuously for 30s WHILE THE RELAY IS ON,
+// something is wrong (sensing fault / supply fault) and we fail safe:
+// relay OFF, offReason = 3.
+//
+// !!! WIRING ASSUMPTION - VERIFY ON YOUR BOARD !!!
+// This assumes the PZEM voltage tap is UPSTREAM of the relay (senses
+// mains even when the relay is off). If your meters show VOLT-000 on
+// the display whenever the relay is off, the tap is DOWNSTREAM and
+// this feature needs different logic - tell me before flashing.
+// Recovery: voltage returning above 100V clears the fault, and a
+// successful recharge also clears it (remote un-stick lever).
+static const float V_FAULT_THRESHOLD   = 5.0f;    // "000" territory
+static const float V_RECOVER_THRESHOLD = 100.0f;  // clearly-live mains
+static const unsigned long V_FAULT_TIME_MS = 30000UL;
+static bool voltageFault = false;
+static unsigned long vZeroSince = 0;
+
+// Why the supply is off right now (also sent to app + server):
+// 0 = supply ON / all good
+// 1 = OFF: balance exhausted
+// 2 = OFF: countdown time expired
+// 3 = OFF: voltage fault (no voltage sensed for 30s)
+static uint8_t offReason = 0;
+
+// =====================================================
+//  BLE STATUS PROTOCOL (NEW v1.2)
+//  Success reply:  OK:<balance>:<relay>:<power>:<energy>:<seconds>:<voltage>:<reason>
+//     example:     OK:150.25:on:1200:34.567:360000:229.8:0
+//  Error reply:    ERR:<code>     (-99 invalid token, -98 busy/retry)
+//  The app can also write the literal text  STATUS  to receive the
+//  same string without performing a recharge.
+//  NOTE: requires the app to negotiate MTU >= 64 (see BLEManager).
+// =====================================================
+String buildStatusString(float bal)
+{
+    String s = "OK:";
+    s += String(bal, 2);          s += ":";
+    s += relayState;              s += ":";
+    s += String((int)power);      s += ":";
+    s += String(energy, 3);       s += ":";
+    s += String(timeSeconds);     s += ":";
+    s += String(voltage, 1);      s += ":";
+    s += String(offReason);
+    return s;
+}
+
 // =====================================================
 void handleBleCommands()
 {
@@ -83,9 +153,29 @@ void handleBleCommands()
     Serial.print("BLE value: ");
     Serial.println(value);
 
+    // Plain status query - no recharge performed.
+    if (value == "STATUS") {
+        ble.send(buildStatusString(availableUnits));
+        serverRUnning = false;
+        return;
+    }
+
     float newBalance = meterLogic.handleTopup(value);
-    ble.send(String(newBalance));
-    // availableUnits is updated inside handleTopup - no reload needed.
+
+    if (newBalance >= 0.0f) {
+        // Successful recharge clears a latched voltage fault so support
+        // can un-stick a meter remotely with a normal token.
+        voltageFault = false;
+        vZeroSince = 0;
+
+        // Let relayTask run one cycle so relayState/offReason in the
+        // reply reflect the topup we just applied.
+        vTaskDelay(pdMS_TO_TICKS(250));
+
+        ble.send(buildStatusString(newBalance));
+    } else {
+        ble.send("ERR:" + String((int)newBalance));
+    }
 
     serverRUnning = false;
 }
@@ -104,6 +194,9 @@ void sendUpdate()
     url += "&seconds=" + String(timeSeconds);
     url += "&meter_number=" + meterNo;
     url += "&voltage=" + String(voltage, 2);
+    url += "&reason=" + String(offReason);   // NEW v1.2 - delete this one
+                                             // line if the server rejects
+                                             // unknown parameters
 
     cloud.sendRequest(url);
 }
@@ -153,15 +246,28 @@ void checkServerData()
                 saveBalanceSnapshot(true);   // persist before restart
                 ESP.restart();
             }
+
+            // Sentinel so we can detect a successful CLOUD topup below
+            // (handleTopup returns >= 0 only on success).
+            newBalanceTop = -1000.0f;
+
             String getDataUrl = "http://iot.truvend.online/iot/get_command/" + String(meterNo);
             cloud.sendRequest(getDataUrl);
+
+            if (newBalanceTop >= 0.0f) {
+                // Cloud recharge succeeded - same remote un-stick lever
+                // as the BLE path.
+                voltageFault = false;
+                vZeroSince = 0;
+            }
+
             sendUpdate();
         }
     }
 }
 
 // =====================================================
-//  THE ACCOUNTING LOOP
+//  THE ACCOUNTING LOOP (unchanged from v1.1-final)
 // =====================================================
 void updatePowerReadings()
 {
@@ -258,18 +364,60 @@ void updatePowerReadings()
 }
 
 // =====================================================
+//  Zero-voltage fault tracking (NEW v1.2)
+// =====================================================
+void updateVoltageFault()
+{
+    // Clearly-live mains: reset counter, clear any latched fault.
+    if (voltage >= V_RECOVER_THRESHOLD) {
+        vZeroSince = 0;
+        if (voltageFault) {
+            voltageFault = false;
+            Serial.println("Voltage fault CLEARED (mains back)");
+        }
+        return;
+    }
+
+    // Near-zero voltage while the relay is supposed to be delivering
+    // power: start/continue the 30s countdown to fail-safe cutoff.
+    // (Only counted while relay is ON - if it's already off, there is
+    // nothing to protect and, with upstream sensing, mains loss just
+    // shows as NET/VOLT readings without tripping anything.)
+    if (voltage < V_FAULT_THRESHOLD) {
+        if (relay.isOn()) {
+            if (vZeroSince == 0) {
+                vZeroSince = millis();
+            }
+            else if (!voltageFault &&
+                     millis() - vZeroSince >= V_FAULT_TIME_MS) {
+                voltageFault = true;
+                Serial.println("VOLTAGE FAULT: 0V for 30s - relay OFF");
+            }
+        }
+    }
+    else {
+        // Between 5V and 100V: indeterminate (sag/brownout) - don't
+        // accumulate toward a fault, don't clear one either.
+        vZeroSince = 0;
+    }
+}
+
+// =====================================================
 void updateRelayState()
 {
+    updateVoltageFault();
+
     float remaining = availableUnits;   // live balance
 
-    if (remaining >= 0.01 && !relay.isOn() && timeSeconds > 0)
+    if (remaining >= 0.01 && !relay.isOn() && timeSeconds > 0 &&
+        !voltageFault)
     {
         relay.turnOn();
         Serial.println("Relay ON");
         relayState = "on";
     }
 
-    if ((remaining < 0.01 || timeSeconds <= 0) && relay.isOn())
+    if ((remaining < 0.01 || timeSeconds <= 0 || voltageFault) && relay.isOn())
     {
         relay.turnOff();
         Serial.println("Relay OFF");
@@ -277,11 +425,18 @@ void updateRelayState()
     }
 
     // If relay should be OFF but there is power flowing
-    if ((remaining <= 0.01 || timeSeconds <= 0) && power > 10) {
+    if ((remaining <= 0.01 || timeSeconds <= 0 || voltageFault) && power > 10) {
         relay.turnOff();  // send OFF pulse
         relayState = "off";
         Serial.println("Relay OFF correction pulse due to load > 10W");
     }
+
+    // Publish WHY the supply is off (0 = it's on / all good).
+    // Priority: voltage fault > balance > time.
+    if (voltageFault)              offReason = 3;
+    else if (remaining < 0.01)     offReason = 1;
+    else if (timeSeconds == 0)     offReason = 2;
+    else                           offReason = 0;
 }
 
 // =====================================================
@@ -359,9 +514,21 @@ void countdownTimer()
 
 void bleTask(void *pvParameters)
 {
+    uint32_t bleWd = 0;
     for(;;)
     {
         handleBleCommands();
+
+        // BLE advertising watchdog (NEW v1.2): every ~5s (250 x 20ms),
+        // re-assert advertising if it silently died. NimBLE restarts
+        // advertising on clean disconnects, but failed half-connections
+        // or radio contention with WiFi can kill it without any
+        // callback firing. Costs one flag-read when healthy.
+        if (++bleWd >= 250) {
+            bleWd = 0;
+            ble.ensureAdvertising();
+        }
+
         vTaskDelay(20 / portTICK_PERIOD_MS);
     }
 }
@@ -388,6 +555,25 @@ void displayTask(void *pvParameters)
 {
     for(;;)
     {
+        // Self-healing re-init: at 5s and 30s after boot (two chances
+        // to catch a garbled cold-start init), then every 5 min as a
+        // watchdog. The MAX7219 is write-only - its state can't be read
+        // back and verified - so periodic blind refresh is the only
+        // robust strategy. Control registers are rewritten here; digit
+        // data is rewritten by the normal 2s display rotation. Between
+        // them, no register can hold garbage for more than one cycle.
+        // A healthy display just blinks for a frame. Touches nothing
+        // but the display.
+        unsigned long up = millis();
+        if ((reinitStage == 0 && up > 5000) ||
+            (reinitStage == 1 && up > 30000) ||
+            (up - lastDisplayReinit >= DISPLAY_REINIT_INTERVAL)) {
+            display.begin(DIN, CLK, CS);
+            if (reinitStage < 2) reinitStage++;
+            lastDisplayReinit = up;
+            lastDisplayUpdate = 0;          // force immediate redraw
+        }
+
         updateDisplay();
         vTaskDelay(100 / portTICK_PERIOD_MS);
     }
@@ -416,7 +602,7 @@ void cloudTask(void *pvParameters)
 void setup()
 {
     Serial.begin(115200);
-    Serial.println("Booting system v1.1-final...");
+    Serial.println("Booting system v1.2...");
 
     // Mutex MUST exist before any task can touch the balance.
     balanceMutex = xSemaphoreCreateMutex();
@@ -452,6 +638,7 @@ void setup()
 
     powerMeter.begin(Serial2, PZEM_RX, PZEM_TX);
     relay.begin(RELAY1, RELAY2);
+    delay(250);   // let the display rail settle from a cold start
     display.begin(DIN, CLK, CS);
     ble.begin(meterNo.c_str());
 

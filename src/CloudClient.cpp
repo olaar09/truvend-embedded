@@ -6,6 +6,16 @@
 MeterLogic loadmeter;
 CommandParser parser;
 
+// v1.2: WiFi reconnect backoff. The old code called
+// WiFi.disconnect() + WiFi.begin() on EVERY sendRequest while
+// disconnected - i.e. every ~5s. Each begin() is a full channel scan on
+// the ESP32's single shared radio, which starves BLE advertising slots
+// (meters in weak-WiFi spots became invisible to phones) and churns
+// heap. Now: one manual reconnect attempt per 60s maximum, and
+// setAutoReconnect handles gentle rejoin attempts in between.
+static unsigned long lastWifiRetry = 0;
+static const unsigned long WIFI_RETRY_INTERVAL = 60000UL;   // 60s
+
 CloudClient::CloudClient(const char* ssid, const char* password, const String& token)
 {
     _ssid = ssid;
@@ -20,9 +30,20 @@ void CloudClient::begin()
 
     WiFi.begin(_ssid, _password);
 
+    // v1.2: bounded wait (was: infinite loop). If the AP is absent, give
+    // up after 60s and enter normal operation - sendRequest's backoff
+    // keeps retrying, and crucially the 6-hour maintenance restart
+    // becomes reachable even for meters with no working WiFi (it used
+    // to be blocked here forever, so offline meters never self-healed).
+    unsigned long start = millis();
     while (WiFi.status() != WL_CONNECTED)
     {
         wifiCon = false;
+        if (millis() - start > 60000UL) {
+            Serial.println("WiFi not found in 60s - continuing offline");
+            lastWifiRetry = millis();   // start the backoff clock
+            return;
+        }
         vTaskDelay(pdMS_TO_TICKS(500));
         Serial.print(".");
     }
@@ -34,8 +55,16 @@ void CloudClient::sendRequest(const String& url)
     if (WiFi.status() != WL_CONNECTED)
     {
         wifiCon = false;
-        WiFi.disconnect();
-        WiFi.begin(_ssid, _password);
+
+        // v1.2: at most one manual reconnect kick per 60s (see note at
+        // top of file). Between kicks, the stack's auto-reconnect keeps
+        // trying quietly without hogging the radio.
+        if (millis() - lastWifiRetry >= WIFI_RETRY_INTERVAL)
+        {
+            lastWifiRetry = millis();
+            WiFi.disconnect();
+            WiFi.begin(_ssid, _password);
+        }
         return;
     }
     wifiCon = true;
@@ -61,8 +90,8 @@ void CloudClient::sendRequest(const String& url)
 
         Serial.print(".");
 
-        // parse() now validates the whole structure; a malformed or
-        // empty payload can no longer reach handleTopup.
+        // parse() validates the whole structure; a malformed or
+        // empty payload can never reach handleTopup.
         if (payload.length() > 0 && parser.parse(payload))
         {
             id = parser.getId();
